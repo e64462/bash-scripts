@@ -1,8 +1,5 @@
 #!/usr/bin/bash
 
-# For maintaining a copy on git - see
-# ***MOST PROMISING *** https://stackoverflow.com/questions/51570811/git-for-single-file-without-git ***MOST PROMISING***
-
 CONFIGURATION_FILE='/etc/managebackups.conf'
 DATE="$(date +%m-%d-%Y-%I:%M:%S-%p)"
 
