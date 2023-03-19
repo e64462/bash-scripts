@@ -33,15 +33,15 @@ Caveats:
  2) White space in <file> must be escaped or quoted for processing
 
 Dependencies:
- 1) bash version 5.0.17 +
- 2) borg version 1.2.3 +
- 3) Ubuntu 20.04 +
+ 1) bash version 5.0.17 +  - (associative arrays)
+ 2) borg version 1.2.3 +   - (deduplication)
+ 3) Ubuntu 20.04 +         - (sudo)
 
 Configuration options are loaded from '$CONFIGURATION_FILE'
- Mandatory Entries:
-	BORG_REPO=</path/to/borg/repository>
-	BORG_PASSPHRASE=<repository password string>
-	BACKUP_DB=</path/to/backup/file>
+    Mandatory Entries:
+        BORG_REPO=</path/to/borg/repository>
+        BORG_PASSPHRASE=<repository password string>
+        BACKUP_DB=</path/to/backup/file>
 
 A Borg repository must be setup prior using '$(basename $0)'. Use:
 	borg init /path/to/borg/repository
@@ -90,23 +90,23 @@ append_to_backup_list() {
 remove_from_backup_list() {
 	num_lines=$(wc -l $BACKUP_DB | awk '{print $1}')
     is_num_regex='^[1-9][0-9]*$'
-
-    if [[ $1 =~ $is_num_regex && $1 -le $num_lines ]]; then
-        # function received a number that is less than or equal to the number of borg backups
-        db_entry=$(sed -n "$1{p;q}" $BACKUP_DB)
+	
+	if [[ $1 =~ $is_num_regex && $1 -le $num_lines ]]; then
+		# function received a number that is less than or equal to the number of borg backups
+		db_entry=$(sed -n "$1{p;q}" $BACKUP_DB)
 		db_entry_line_num=$1
 	elif grep -Fxq "$1" $BACKUP_DB; then
 		# function received an entry tracked by the database
-        db_entry=$1
+		db_entry=$1
 		db_entry_line_num=$(grep -nFx "$1" $BACKUP_DB | cut -f1 -d:)
 	else
 		echo -e "\nERROR: No match to '$1' found in '$BACKUP_DB'\n"
 		exit 1
-    fi
+	fi
 	
 	user=$SUDO_USER
-    home=$(getent passwd $SUDO_USER | cut -d: -f6)
-	install -d -m 0755 -o "$user" -g "$user" "$home/temp"	
+	home=$(getent passwd $SUDO_USER | cut -d: -f6)
+	install -d -m 0755 -o "$user" -g "$user" "$home/temp"
 	echo -e "\nRemoving '$db_entry' from '$BACKUP_DB'\n"
 	sed -i "${db_entry_line_num}d" $BACKUP_DB
 }
@@ -166,7 +166,7 @@ restore_borg_backup() {
 	num_archives=$(borg list "$BORG_REPO" | wc -l)
 	is_num_regex='^[1-9][0-9]*$'
 	user=$SUDO_USER
-    home=$(getent passwd $SUDO_USER | cut -d: -f6)
+	home=$(getent passwd $SUDO_USER | cut -d: -f6)
 	install -d -m 0755 -o "$user" -g "$user" "$home/temp"
 
 	if [[ $1 =~ $is_num_regex && $1 -le $num_archives ]]; then
