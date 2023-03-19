@@ -1,0 +1,418 @@
+#!/usr/bin/bash
+
+# For maintaining a copy on git - see
+# ***MOST PROMISING *** https://stackoverflow.com/questions/51570811/git-for-single-file-without-git ***MOST PROMISING***
+
+CONFIGURATION_FILE='/etc/managebackups.conf'
+DATE="$(date +%m-%d-%Y-%I:%M:%S-%p)"
+
+usage(){
+>&2 cat << EOF
+
+This program is used to manage the backup 'database' defined in '$CONFIGURATION_FILE'
+
+It is probably inefficient, buggy, and prone to explode or worse.
+
+Usage: 
+ $(basename $0) [option] <file>
+ 
+Options:
+ -a, --add      : Add a file to the 'database'
+ -b, --backup   : Backup 'database' files with borg backup
+ -c, --cleanup  : Cleanup backup files
+ -d, --del      : Delete a file from the 'database'
+ -e, --extract	: Extract a borg backup to ~/temp
+ -l, --list     : List all borg backups
+ -h, --help     : Display usage information
+ -s, --show     : Show all paths monitored by $(basename $0)
+
+Caveats:
+ 1) A new -a or -r flag must preceed each path given, something like:
+      $(basename $0) -a <file1> -a <file2> 
+
+ 2) White space in <file> must be escaped or quoted for processing
+
+Dependencies:
+ 1) bash version 5.0.17 +
+ 2) borg version 1.2.3 +
+ 3) Ubuntu 20.04 +
+
+Configuration options are loaded from '$CONFIGURATION_FILE'
+ Mandatory Entries:
+	BORG_REPO=</path/to/borg/repository>
+	BORG_PASSPHRASE=<repository password string>
+	BACKUP_DB=</path/to/backup/file>
+
+A Borg repository must be setup prior using '$(basename $0)'. Use:
+	borg init /path/to/borg/repository
+
+EOF
+exit 1
+}
+
+parse_config() {
+	typeset -A config
+	config=(
+		[BORG_PASSPHRASE]=""
+		[BORG_REPO]=""
+		[BACKUP_DB]=""
+	)
+	
+	while read line; do
+		if echo $line | grep -F = &>/dev/null; then
+			varname=$(echo "$line" | cut -d '=' -f 1)
+			config[$varname]=$(echo "$line" | cut -d '=' -f 2-)
+		fi
+	done < $CONFIGURATION_FILE
+	
+	export BORG_PASSPHRASE=${config[BORG_PASSPHRASE]}
+	export BORG_REPO=${config[BORG_REPO]}
+	export BACKUP_DB=${config[BACKUP_DB]}
+}
+
+append_to_backup_list() {
+	if [[ ! -f "$1" && ! -d "$1" ]]; then
+		echo -e "\nERROR: Path '$1' doesn't seem to exist. Exiting.\n"
+		exit 1
+	fi
+
+	# normalize the input
+	file=$(readlink -e "$1")
+
+  	if ! grep -Fxq "$file" $BACKUP_DB; then
+		echo -e "\nAppending '$file' to end of '$BACKUP_DB'\n"
+		echo "$file" >> $BACKUP_DB
+	else
+		echo -e "\nWARN: Path '$file' already exists in '$BACKUP_DB'\n"
+	fi
+}
+
+remove_from_backup_list() {
+	num_lines=$(wc -l $BACKUP_DB | awk '{print $1}')
+    is_num_regex='^[1-9][0-9]*$'
+
+    if [[ $1 =~ $is_num_regex && $1 -le $num_lines ]]; then
+        # function received a number that is less than or equal to the number of borg backups
+        db_entry=$(sed -n "$1{p;q}" $BACKUP_DB)
+		db_entry_line_num=$1
+	elif grep -Fxq "$1" $BACKUP_DB; then
+		# function received an entry tracked by the database
+        db_entry=$1
+		db_entry_line_num=$(grep -nFx "$1" $BACKUP_DB | cut -f1 -d:)
+	else
+		echo -e "\nERROR: No match to '$1' found in '$BACKUP_DB'\n"
+		exit 1
+    fi
+	
+	user=$SUDO_USER
+    home=$(getent passwd $SUDO_USER | cut -d: -f6)
+	install -d -m 0755 -o "$user" -g "$user" "$home/temp"	
+	echo -e "\nRemoving '$db_entry' from '$BACKUP_DB'\n"
+	sed -i "${db_entry_line_num}d" $BACKUP_DB
+}
+
+parse_parents() {
+	while read line; do
+		printf '%s\n' "$line"
+	done < $BACKUP_DB | \
+
+	# The awk command(s) below will create duplicate entries on unsorted data
+	sort | \
+
+	# The commands below (recursively?) creates a unique entry for the full *parent* directory structure 
+	# pointing to the file/folder we want backed up,
+	# Stolen from: https://serverfault.com/questions/877254/tar-does-not-retain-directory-permissions
+	awk -F/ '{ d=$1; for (i=2; i <= NF; i++) { print d; d=d "/" $i }; print d }' | \
+	awk '{ if (index(old,$0 "/") != 1) { old=$0; print } }' | \
+	sed '/^[[:space:]]*$/d' | \
+	sed '/\/$/d'
+}
+
+recurse_directories() {
+	while read line; do
+		if [[ -d $line ]]; then
+			# this recursively prints all files and subdirectories of the folder we wish to backup
+			find "$line" -print
+		fi
+	done < $BACKUP_DB
+}
+
+create_borg_backup() {
+	echo -e "\nCreating new backup '$DATE' in '$BORG_REPO'\n"
+
+	{ parse_parents && recurse_directories; } | sort -u | \
+		borg create --paths-from-stdin "$BORG_REPO::$DATE"
+}
+
+list_borg_backups() {
+	printf "%s\n%-8s%s\n" "" "#" "ARCHIVE NAME"
+	printf "%s%s\n" "------  ------------"
+	counter=0
+	borg list "$BORG_REPO" | \
+		while read line; do
+			((counter+=1))
+			archive_name=$(echo $line | awk '{print $1}')
+			if [[ $# -eq 0 ]]; then
+				printf "%-8s%s\n" "$counter" "$archive_name"
+			elif [[ $counter -eq $1 ]]; then
+				printf "%-8s%s\n" "[*$counter]" "$archive_name"
+			else
+				printf "%-8s%s\n" "$counter" "$archive_name"
+			fi
+		done
+}
+
+restore_borg_backup() {
+	num_archives=$(borg list "$BORG_REPO" | wc -l)
+	is_num_regex='^[1-9][0-9]*$'
+	user=$SUDO_USER
+    home=$(getent passwd $SUDO_USER | cut -d: -f6)
+	install -d -m 0755 -o "$user" -g "$user" "$home/temp"
+
+	if [[ $1 =~ $is_num_regex && $1 -le $num_archives ]]; then
+		# function received a number that is less than or equal to the number of borg backups
+		borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
+	else	
+		borg_archive=$1
+	fi
+
+   	echo -e "\nAttempting to extract '$borg_archive' to $home/temp.\n"
+	workingdir=$(pwd)
+	cd $home/temp
+	borg extract $BORG_REPO::$borg_archive 2> /dev/null
+	exit_code=$?
+
+	if [[ $exit_code -ne 0 ]]; then
+		echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
+		echo -e "Use '$(basename $0) --list' to display a list of all valid archives.\n"
+	else
+		echo -e "Success! Files extracted to $home/temp.\n"
+	fi
+	cd $workingdir
+}
+
+borg_compact_and_prune() {
+	borg prune --list --keep-daily=7 --keep-weekly=4 --keep-monthly=12 --keep-yearly=1 $BORG_REPO 
+	borg compact $BORG_REPO
+}
+
+duplicate_borg_repo() {
+	# This function silently duplicates the data in borg backup to a second destination
+	# every time managebackups terminates cleanly
+	rsync -au --delete "/mnt/sda1/server_backups/" "/home/nick/.server_backups_duplicate" > /dev/null
+}
+
+print_database() {
+	printf "\n%-8s%-8s%s\n" "#" "TYPE" "PATH"
+	printf "%s%s\n" "------  ------  ------"
+	counter=0
+	cat $BACKUP_DB | \
+		while read line; do
+			if [[ -d $line ]]; then
+				entry_type="Folder"
+			elif [[ -f $line ]]; then
+				entry_type="File"
+			fi
+
+			((counter+=1))
+			if [[ $# -eq 0 ]]; then
+				printf "%-8s%-8s%s\n" "$counter" "$entry_type" "$line"
+			elif [[ $counter -eq $1 ]]; then
+				printf "%-8s%-8s%s\n" "[*$counter]" "$entry_type" "$line"
+			else
+				printf "%-8s%-8s%s\n" "$counter" "$entry_type" "$line"
+			fi
+		done
+}
+
+get_password() {
+	# This function is more a 'proof of concept' for a future version... the script can't edit itself so...
+	read -s -p "Enter Password: " first_entry
+	echo
+	read -s -p "Re-Enter Password: " second_entry
+
+	if [[ "$first_entry" == "$second_entry" ]]; then
+		echo -e "\nSuccess! Permanently storing your password for all future backups.\n"
+		echo -e "Psych! This needs to be thought through more carefully... come back to this idea"
+	else
+		echo -e "\nPasswords don't match. Please try again.\n"
+		get_password
+	fi
+}
+
+if [[ $# -eq 0 ]]; then
+	usage
+	exit 1
+elif [[ $EUID -ne 0 ]]; then
+	echo -e "\n$(basename $0) requires sudo privileges.\n"
+	exit 1
+else
+	parse_config
+fi
+
+args=$(getopt -n $(basename $0) -a -o a:e:d:hblcs --long add:,del:,extract:,help,backup,list,cleanup,show -- "$@")
+
+# eval *can* be dangerous, see explanation here
+#   - https://www.linuxquestions.org/questions/linux-desktop-74/alternative-to-eval-4175702722/#post6312000
+# part of this thread
+#   - https://www.linuxquestions.org/questions/linux-desktop-74/alternative-to-eval-4175702722/
+# it appears to be safe with the version of getopt included on my system, which seems to quote the positional
+# parameters and removes this danger, as explained in the post. Test on your system by echoing "$args" to the shell
+eval set -- ${args}
+
+while :
+do
+	case "$1" in
+		-a | --add )
+			append_to_backup_list "$2"
+			shift 2		;;
+		-b | --backup )
+			create_borg_backup
+			shift		;;
+		-c | --cleanup )
+			borg_compact_and_prune
+			shift		;;
+		-d | --del )
+			remove_from_backup_list "$2" 
+			shift 2		;;
+		-e | --extract )
+			restore_borg_backup "$2"
+			shift 2		;;
+		-l | --list )
+			list_borg_backups
+			shift		;;
+		-h | --help )
+			usage
+			shift		;;
+		-p | --password )
+			get_password
+			shift   ;;
+		-s | --show )
+			print_database
+			shift	;;
+		# -- means the end of the arguments; drop this, and break out of the while loop
+		--)
+			shift; break ;;
+	    *) >&2 echo Unsupported option: $1
+       	    usage ;;
+	esac
+done
+
+duplicate_borg_repo
+
+exit 0
+
+# The functions below are depreciated, and written prior to integration of this script with borg backup for deduplication / storage maangement
+# They are preserved here for posterity, learning, and in loving memory.
+
+remove_from_backup_list() {
+    if [[ ! -f "$1" && ! -d "$1" ]]; then
+        echo -e "\nERROR: Path '$1' doesn't seem to exist. Exiting.\n"
+        exit 1
+    fi
+
+    # normalize the input
+    file=$(readlink -e "$1")
+    if grep -Fxq "$file" $BACKUP_DB; then
+        echo -e "\nRemoving '$file' from '$BACKUP_DB'\n"
+        line=$(grep -nFx "$file" $BACKUP_DB | cut -f1 -d:)
+        sed -i "${line}d" $BACKUP_DB
+    else
+        echo -e "\nWARN: No match to '$file' found in '$BACKUP_DB'\n"
+    fi
+}
+
+restore_borg_backup() {
+    num_archives=$(borg list "$BORG_REPO" | wc -l)
+    is_num_regex='^[1-9][0-9]*$'
+    if [[ $1 =~ $is_num_regex && $1 -le $num_archives ]]; then
+        # function received a number that is less than or equal to the number of borg backups
+        # prompt for confirmation before extracting
+        list_borg_backups $1
+        while true; do
+            read -p "Is this the archive you want to restore? [Y/n] " user_input
+            user_input=${user_input:-Y}
+            case $user_input in
+                [Yy]es | [Yy] )
+                    user=$SUDO_USER
+                    home=$(getent passwd $SUDO_USER | cut -d: -f6)
+                    borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
+                    # echo -e "\nThe value in 'borg_archive' is '$borg_archive'\n"
+                    install -d -m 0755 -o "$user" -g "$user" "$home/temp"
+                    echo -e "\nAttempting to extract '$borg_archive' to $home/temp.\n"
+                    workingdir=$(pwd)
+                    cd $home/temp
+                    borg extract $BORG_REPO::$borg_archive 2> /dev/null
+                    exit_code=$?
+                    if [[ $exit_code -ne 0 ]]; then
+                        echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
+                        echo -e "Use '$(basename $0) --list' to display a list of all valid archives.\n"
+                    else
+                        echo -e "Success! Files extracted to $home/temp.\n"
+                    fi
+                        cd $workingdir
+                    break
+                    ;;
+                [Nn]o | [Nn] )
+                    read -p "Please enter the archive number or name you would like to restore: " user_input
+                    restore_borg_backup $user_input
+                    break
+                    ;;
+                * )
+                    echo -e "\nINPUT ERROR: Valid responses are [Y/n].\n"
+                    ;;
+            esac
+        done
+    else
+        user=$SUDO_USER
+        home=$(getent passwd $SUDO_USER | cut -d: -f6)
+        install -d -m 0755 -o "$user" -g "$user" "$home/temp"
+        echo -e "\nAttempting to extract '$1' to $home/temp.\n"
+        workingdir=$(pwd)
+        cd $home/temp
+        borg extract $BORG_REPO::$1 2> /dev/null
+        exit_code=$?
+        if [[ $exit_code -ne 0 ]]; then
+            echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
+            echo -e "Use '$(basename $0) --list' to display a list of all valid archives.\n"
+        else
+            echo -e "\nSuccess! Files extracted to $home/temp.\n"
+        fi
+        cd $workingdir
+    fi
+}
+
+
+create_backup() {
+        # This function is probably obsolete with borg backup... but should be preserved bcause a lot of effort went in to creating it
+        # See create_borg_backup function for a backup solution that doesn't duplicate files that have already been backed up without
+        # recent modification.
+        echo -e "\nCreating new backup '$DATE.tar.gpg' in '$BORG_REPO'\n"
+
+        { parse_files && parse_directories; } | sort -u | \
+        tar -c --no-recursion --verbatim-files-from -T - -f - | \
+        gpg --pinentry-mode loopback --passphrase $BORG_PASSPHRASE --symmetric  -o "$BORG_REPO/$DATE.tar.gpg"
+}
+
+restore_backup() {
+        if [[ ! -f "$1" && ! -d "$1" ]]; then
+                echo -e "\nERROR: Path '$1' doesn't seem to exist. Exiting.\n"
+                exit 1
+        fi
+
+        # normalize the input
+        file=$(readlink -e "$1")
+
+        if [[ $file != *.tar.gpg ]]; then
+                echo -e "\nERROR: '$(basename "$file")' is not a valid backup. Please provide a '.tar.gpg' extension."
+                exit 1
+        else
+                user=$SUDO_USER
+                home=$(getent passwd $SUDO_USER | cut -d: -f6)
+                install -d -m 0755 -o "$user" -g "$user" "$home/temp"
+                echo -e "\nExtracting '$(basename $file)' to $home/temp.\n"
+
+                gpg --pinentry-mode loopback --passphrase $BORG_PASSPHRASE --output - --decrypt $file | \
+                tar -xf - -C "$home/temp" > /dev/null
+        fi
+}
