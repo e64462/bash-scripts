@@ -2,6 +2,8 @@
 
 CONFIGURATION_FILE='/etc/managebackups.conf'
 DATE="$(date +%m-%d-%Y-%I:%M:%S-%p)"
+FILENAME=$(basename $0)
+IS_NUM_REGEX='^[1-9][0-9]*$'
 
 usage(){
 >&2 cat << EOF
@@ -11,7 +13,7 @@ This program is used to manage the backup 'database' defined in '$CONFIGURATION_
 It is probably inefficient, buggy, and prone to explode or worse.
 
 Usage: 
- $(basename $0) [option] <file>
+ $FILENAME [option] <file>
  
 Options:
  -a, --add      : Add a file to the 'database'
@@ -21,11 +23,11 @@ Options:
  -e, --extract	: Extract a borg backup to ~/temp
  -l, --list     : List all borg backups
  -h, --help     : Display usage information
- -s, --show     : Show all paths monitored by $(basename $0)
+ -s, --show     : Show all paths monitored by $FILENAME
 
 Caveats:
  1) A new -a or -r flag must preceed each path given, something like:
-      $(basename $0) -a <file1> -a <file2> 
+      $FILENAME -a <file1> -a <file2> 
 
  2) White space in <file> must be escaped or quoted for processing
 
@@ -40,7 +42,7 @@ Configuration options are loaded from '$CONFIGURATION_FILE'
         BORG_PASSPHRASE=<repository password string>
         BACKUP_DB=</path/to/backup/file>
 
-A Borg repository must be setup prior using '$(basename $0)'. Use:
+A Borg repository must be setup prior using '$FILENAME'. Use:
 	borg init /path/to/borg/repository
 
 EOF
@@ -49,14 +51,19 @@ exit 1
 
 parse_config() {
 	typeset -A config
+	
 	config=(
 		[BORG_PASSPHRASE]=""
 		[BORG_REPO]=""
 		[BACKUP_DB]=""
+		[EXTRACT_TO]="$(getent passwd $SUDO_USER | cut -d: -f6)"
+		[USER]="$SUDO_USER"
 	)
 	
 	while read line; do
-		if echo $line | grep -F = &>/dev/null; then
+		if [[ "$line" =~ ^#.*$ ]]; then
+			continue
+		elif echo $line | grep -F = &>/dev/null; then
 			varname=$(echo "$line" | cut -d '=' -f 1)
 			config[$varname]=$(echo "$line" | cut -d '=' -f 2-)
 		fi
@@ -65,6 +72,8 @@ parse_config() {
 	export BORG_PASSPHRASE=${config[BORG_PASSPHRASE]}
 	export BORG_REPO=${config[BORG_REPO]}
 	export BACKUP_DB=${config[BACKUP_DB]}
+	export EXTRACT_TO=${config[EXTRACT_TO]}
+	export USER=${config[USER]}
 }
 
 append_to_backup_list() {
@@ -86,9 +95,8 @@ append_to_backup_list() {
 
 remove_from_backup_list() {
 	num_lines=$(wc -l $BACKUP_DB | awk '{print $1}')
-    is_num_regex='^[1-9][0-9]*$'
 	
-	if [[ $1 =~ $is_num_regex && $1 -le $num_lines ]]; then
+	if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_lines ]]; then
 		# function received a number that is less than or equal to the number of borg backups
 		db_entry=$(sed -n "$1{p;q}" $BACKUP_DB)
 		db_entry_line_num=$1
@@ -101,9 +109,6 @@ remove_from_backup_list() {
 		exit 1
 	fi
 	
-	user=$SUDO_USER
-	home=$(getent passwd $SUDO_USER | cut -d: -f6)
-	install -d -m 0755 -o "$user" -g "$user" "$home/temp"
 	echo -e "\nRemoving '$db_entry' from '$BACKUP_DB'\n"
 	sed -i "${db_entry_line_num}d" $BACKUP_DB
 }
@@ -161,29 +166,26 @@ list_borg_backups() {
 
 restore_borg_backup() {
 	num_archives=$(borg list "$BORG_REPO" | wc -l)
-	is_num_regex='^[1-9][0-9]*$'
-	user=$SUDO_USER
-	home=$(getent passwd $SUDO_USER | cut -d: -f6)
-	install -d -m 0755 -o "$user" -g "$user" "$home/temp"
+	install -d -m 0755 -o "$USER" -g "$USER" "$EXTRACT_TO/temp"
 
-	if [[ $1 =~ $is_num_regex && $1 -le $num_archives ]]; then
+	if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_archives ]]; then
 		# function received a number that is less than or equal to the number of borg backups
 		borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
 	else	
 		borg_archive=$1
 	fi
 
-   	echo -e "\nAttempting to extract '$borg_archive' to $home/temp.\n"
+   	echo -e "\nAttempting to extract '$borg_archive' to $EXTRACT_TO/temp.\n"
 	workingdir=$(pwd)
-	cd $home/temp
+	cd $EXTRACT_TO/temp
 	borg extract $BORG_REPO::$borg_archive 2> /dev/null
 	exit_code=$?
 
 	if [[ $exit_code -ne 0 ]]; then
 		echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
-		echo -e "Use '$(basename $0) --list' to display a list of all valid archives.\n"
+		echo -e "Use '$FILENAME --list' to display a list of all valid archives.\n"
 	else
-		echo -e "Success! Files extracted to $home/temp.\n"
+		echo -e "Success! Files extracted to $EXTRACT_TO/temp.\n"
 	fi
 	cd $workingdir
 }
@@ -201,7 +203,7 @@ duplicate_borg_repo() {
 
 print_database() {
 	printf "\n%-8s%-8s%s\n" "#" "TYPE" "PATH"
-	printf "%s%s\n" "------  ------  ------"
+	printf "%s%s%s\n" "------  ------  ------"
 	counter=0
 	cat $BACKUP_DB | \
 		while read line; do
@@ -241,13 +243,13 @@ if [[ $# -eq 0 ]]; then
 	usage
 	exit 1
 elif [[ $EUID -ne 0 ]]; then
-	echo -e "\n$(basename $0) requires sudo privileges.\n"
+	echo -e "\n$FILENAME requires sudo privileges.\n"
 	exit 1
 else
 	parse_config
 fi
 
-args=$(getopt -n $(basename $0) -a -o a:e:d:hblcs --long add:,del:,extract:,help,backup,list,cleanup,show -- "$@")
+args=$(getopt -n $FILENAME -a -o a:e:d:hblcs --long add:,del:,extract:,help,backup,list,cleanup,show -- "$@")
 
 # eval *can* be dangerous, see explanation here
 #   - https://www.linuxquestions.org/questions/linux-desktop-74/alternative-to-eval-4175702722/#post6312000
@@ -321,8 +323,7 @@ remove_from_backup_list() {
 
 restore_borg_backup() {
     num_archives=$(borg list "$BORG_REPO" | wc -l)
-    is_num_regex='^[1-9][0-9]*$'
-    if [[ $1 =~ $is_num_regex && $1 -le $num_archives ]]; then
+    if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_archives ]]; then
         # function received a number that is less than or equal to the number of borg backups
         # prompt for confirmation before extracting
         list_borg_backups $1
@@ -331,21 +332,18 @@ restore_borg_backup() {
             user_input=${user_input:-Y}
             case $user_input in
                 [Yy]es | [Yy] )
-                    user=$SUDO_USER
-                    home=$(getent passwd $SUDO_USER | cut -d: -f6)
-                    borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
-                    # echo -e "\nThe value in 'borg_archive' is '$borg_archive'\n"
-                    install -d -m 0755 -o "$user" -g "$user" "$home/temp"
-                    echo -e "\nAttempting to extract '$borg_archive' to $home/temp.\n"
+					borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
+                    install -d -m 0755 -o "$USER" -g "$USER" "$EXTRACT_TO/temp"
+                    echo -e "\nAttempting to extract '$borg_archive' to $EXTRACT_TO/temp.\n"
                     workingdir=$(pwd)
-                    cd $home/temp
+                    cd $EXTRACT_TO/temp
                     borg extract $BORG_REPO::$borg_archive 2> /dev/null
                     exit_code=$?
                     if [[ $exit_code -ne 0 ]]; then
                         echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
-                        echo -e "Use '$(basename $0) --list' to display a list of all valid archives.\n"
+                        echo -e "Use '$FILENAME --list' to display a list of all valid archives.\n"
                     else
-                        echo -e "Success! Files extracted to $home/temp.\n"
+                        echo -e "Success! Files extracted to $EXTRACT_TO/temp.\n"
                     fi
                         cd $workingdir
                     break
@@ -361,19 +359,17 @@ restore_borg_backup() {
             esac
         done
     else
-        user=$SUDO_USER
-        home=$(getent passwd $SUDO_USER | cut -d: -f6)
-        install -d -m 0755 -o "$user" -g "$user" "$home/temp"
-        echo -e "\nAttempting to extract '$1' to $home/temp.\n"
+        install -d -m 0755 -o "$USER" -g "$USER" "$EXTRACT_TO/temp"
+        echo -e "\nAttempting to extract '$1' to $EXTRACT_TO/temp.\n"
         workingdir=$(pwd)
-        cd $home/temp
+        cd $EXTRACT_TO/temp
         borg extract $BORG_REPO::$1 2> /dev/null
         exit_code=$?
         if [[ $exit_code -ne 0 ]]; then
             echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
-            echo -e "Use '$(basename $0) --list' to display a list of all valid archives.\n"
+            echo -e "Use '$FILENAME --list' to display a list of all valid archives.\n"
         else
-            echo -e "\nSuccess! Files extracted to $home/temp.\n"
+            echo -e "\nSuccess! Files extracted to $EXTRACT_TO/temp.\n"
         fi
         cd $workingdir
     fi
@@ -404,12 +400,10 @@ restore_backup() {
                 echo -e "\nERROR: '$(basename "$file")' is not a valid backup. Please provide a '.tar.gpg' extension."
                 exit 1
         else
-                user=$SUDO_USER
-                home=$(getent passwd $SUDO_USER | cut -d: -f6)
-                install -d -m 0755 -o "$user" -g "$user" "$home/temp"
-                echo -e "\nExtracting '$(basename $file)' to $home/temp.\n"
+                install -d -m 0755 -o "$USER" -g "$USER" "$EXTRACT_TO/temp"
+                echo -e "\nExtracting '$FILENAME' to $EXTRACT_TO/temp.\n"
 
                 gpg --pinentry-mode loopback --passphrase $BORG_PASSPHRASE --output - --decrypt $file | \
-                tar -xf - -C "$home/temp" > /dev/null
+                tar -xf - -C "$EXTRACT_TO/temp" > /dev/null
         fi
 }
