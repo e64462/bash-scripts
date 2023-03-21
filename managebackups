@@ -58,6 +58,7 @@ parse_config() {
 		[BACKUP_DB]=""
 		[EXTRACT_TO]="$(getent passwd $SUDO_USER | cut -d: -f6)"
 		[USER]="$SUDO_USER"
+		[DUPLICATE_REPO_PATH]=""
 	)
 	
 	while read line; do
@@ -74,6 +75,7 @@ parse_config() {
 	export BACKUP_DB=${config[BACKUP_DB]}
 	export EXTRACT_TO=${config[EXTRACT_TO]}
 	export USER=${config[USER]}
+	export DUPLICATE_REPO_PATH=${config[DUPLICATE_REPO_PATH]}
 }
 
 append_to_backup_list() {
@@ -198,7 +200,16 @@ borg_compact_and_prune() {
 duplicate_borg_repo() {
 	# This function silently duplicates the data in borg backup to a second destination
 	# every time managebackups terminates cleanly
-	rsync -au --delete "/mnt/sda1/server_backups/" "/home/nick/.server_backups_duplicate" > /dev/null
+
+	# NOTE: the / after ${BORG_REPO} is actually very important!!!
+	# it instructs rsync to copy the *contents* of ${BORG_REPO} instead of the the directory
+	local primary_repo="${BORG_REPO%/}/"
+	
+	if [[ ! -z $DUPLICATE_REPO_PATH ]]; then
+		rsync -au --delete "$primary_repo" "$DUPLICATE_REPO_PATH" > /dev/null
+	else
+		echo -e "\nWARN: Configuration option 'DUPLIICATE_REPO_PATH' is unset. BORG repo will not be duplicated.\n"
+	fi
 }
 
 print_database() {
