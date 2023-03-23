@@ -41,12 +41,8 @@ Dependencies:
  3) Ubuntu 20.04 +         - (sudo)
 
 Configuration options are loaded from '$CONFIGURATION_FILE'
-    Mandatory Entries:
-        BORG_REPO=</path/to/borg/repository>
-        BORG_PASSPHRASE=<repository password string>
-        BACKUP_DB=</path/to/backup/file>
 
-A Borg repository must be setup prior using '$FILENAME'. Use:
+A Borg repository must be setup prior to using '$FILENAME'. Use:
 	borg init /path/to/borg/repository
 
 EOF
@@ -271,15 +267,16 @@ get_password() {
 	read -s -p "Re-Enter Password: " second_entry
 
 	if [[ "$first_entry" == "$second_entry" ]]; then
-		echo -e "\nSuccess!\n"
-		export BORG_PASSPHRASE="first_entry"
+		export BORG_PASSPHRASE="$first_entry"
 	else
 		echo -e "\nPasswords don't match. Please try again.\n"
 		get_password
 	fi
 }
 
-parse_config
+getopt --test 
+[[ $? -ne 4 ]] && echo -e "\nERROR: this program depends on enhanced getopt. Please install before continuing\n" && exit 4
+
 args=$(getopt -n "$FILENAME" -a -o "$GETOPT_SHORT" --long "$GETOPT_LONG" -- "$@")
 # eval *can* be dangerous, see explanation here
 #   - https://www.linuxquestions.org/questions/linux-desktop-74/alternative-to-eval-4175702722/#post6312000
@@ -293,31 +290,35 @@ while true; do
 	# all long options will be excluded from ARGS
 	if [[ "${1:0:2}" != "--" ]]; then
 		ARGS["${1:1:1}"]=true
+	else
+		if [[ ${#1} -gt 2 ]]; then
+			ARGS["${1:2}"]=true
+		fi
 	fi
 	
 	case "$1" in
 		-a )
 			ADD_ARGS+=("$2")
-			shift 2		;;
+			shift 2	;;
 		-b )
-			shift		;;
+			shift	;;
 		-c )
-			shift		;;
+			shift	;;
 		--directory )
-			export EXTRACT_TO="$2"
-			shift 2		;;
+			DIR_POSITIONAL_ARG="$2"
+			shift 2	;;
 		-e )
 			EXTC_ARG="${2:=missing}"
-			shift 2		;;
+			shift 2	;;
 		-l )
-			shift		;;
+			shift	;;
 		-h )
-			shift		;;
+			shift	;;
 		--password )
-			shift   ;;
+			shift	;;
 		-r )
-            REM_ARGS+=("${2%/}")
-            shift 2     ;;
+			REM_ARGS+=("${2%/}")
+			shift 2     ;;
 		-s )
 			shift	;;
 		# -- means the end of the arguments; drop this, and break out of the while loop
@@ -335,37 +336,17 @@ elif [[ $EUID -ne 0 ]]; then
 	echo -e "\n$FILENAME requires sudo privileges.\n"
     exit 1
 else
-	if [[ ! -z ${ARGS[p]} ]]; then
-		get_password
-	fi
+	parse_config
 
-	if [[ ! -z ${ARGS[a]} ]]; then
-		append_to_backup_list "${ADD_ARGS[@]}"
-	fi
-
-	if [[ ! -z ${ARGS[b]} ]]; then
-		create_borg_backup
-	fi
-
-	if [[ ! -z ${ARGS[c]} ]]; then
-		borg_compact_and_prune
-	fi
-
-	if [[ ! -z ${ARGS[r]} ]]; then
-		remove_from_backup_list "${REM_ARGS[@]}"
-	fi
-
-	if [[ ! -z ${ARGS[e]} ]]; then
-		restore_borg_backup "$EXTC_ARG"
-	fi
-
-	if [[ ! -z ${ARGS[l]} ]]; then
-		list_borg_backups
-	fi
-
-	if [[ ! -z ${ARGS[s]} ]]; then
-		print_database
-	fi
+	[[ ! -z ${ARGS[password]} ]] && get_password
+	[[ ! -z ${ARGS[directory]} ]] && export EXTRACT_TO="$DIR_POSITIONAL_ARG"
+	[[ ! -z ${ARGS[r]} ]] && remove_from_backup_list "${REM_ARGS[@]}"
+	[[ ! -z ${ARGS[a]} ]] && append_to_backup_list "${ADD_ARGS[@]}"
+	[[ ! -z ${ARGS[b]} ]] && create_borg_backup
+	[[ ! -z ${ARGS[c]} ]] && borg_compact_and_prune
+	[[ ! -z ${ARGS[e]} ]] && restore_borg_backup "$EXTC_ARG"
+	[[ ! -z ${ARGS[l]} ]] && list_borg_backups
+	[[ ! -z ${ARGS[s]} ]] && print_database
 
 	duplicate_borg_repo
 fi
