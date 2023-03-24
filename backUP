@@ -10,6 +10,11 @@ GETOPT_LONG='directory:,password'
 usage(){
 >&2 cat << EOF
 
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+
+This is free software; you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+
 This program is used to manage the backup 'database' defined in '$CONFIGURATION_FILE'
 
 It is probably inefficient, buggy, and prone to explode or worse.
@@ -34,11 +39,6 @@ Caveats:
       $FILENAME -a <file1> -a <file2> 
 
  2) White space in <file> must be escaped or quoted for processing
-
-Dependencies:
- 1) bash version 5.0.17 +  - (associative arrays)
- 2) borg version 1.2.3 +   - (deduplication)
- 3) Ubuntu 20.04 +         - (sudo)
 
 Configuration options are loaded from '$CONFIGURATION_FILE'
 
@@ -261,7 +261,6 @@ print_database() {
 }
 
 get_password() {
-	# This function is more a 'proof of concept' for a future version... the script can't edit itself so...
 	read -s -p "Enter Password: " first_entry
 	echo
 	read -s -p "Re-Enter Password: " second_entry
@@ -272,10 +271,35 @@ get_password() {
 		echo -e "\nPasswords don't match. Please try again.\n"
 		get_password
 	fi
+
+	borg info $BORG_REPO >/dev/null 2>&1
+	if [[ $? -ne 0 ]]; then
+		echo -e "\n\nYour password is incorrect. Exiting.\n"
+		exit 1
+	fi
 }
 
+{ printf '%s\n%s' "4.0" "$BASH_VERSION" | sort -C -V; } > /dev/null 2>&1	
+if [[ $? -ne 0 ]]; then
+	printf '\n%s\n' "ERROR: $FILENAME depends on coreutils v7.0+ and Bash v4.0+. Your system is configured with"
+	printf '%-11s%s\n' "Coreutils:" "$(whoami --version | head -n 1 | awk '{print $NF}')"
+	printf '%-11s%s\n\n' "Bash:" "$BASH_VERSION"
+	exit 1
+fi
+
 getopt --test 
-[[ $? -ne 4 ]] && echo -e "\nERROR: this program depends on enhanced getopt. Please install before continuing\n" && exit 4
+[[ $? -ne 4 ]] && echo -e "\nERROR: $FILENAME depends on enhanced getopt. Please install before continuing\n" && exit 4
+
+borg -V > /dev/null 2>&1
+	borg_install_check=$?
+{ printf '%s\n%s' "1.2.3" "$(borg -V | awk '{print $NF}')" | sort -C -V; } > /dev/null 2>&1
+	borg_version_check=$?
+
+if [[ $borg_install_check -ne 0 || $borg_version_check -ne 0 ]]; then
+	printf '\n%s\n' "ERROR: $FILENAME depends on BORG Backup v1.2.3+. Your system is configured with"
+	printf '%-13s%s\n\n' "BORG Backup:" "$(borg -V | awk '{print $NF}')"
+	exit 1
+fi
 
 args=$(getopt -n "$FILENAME" -a -o "$GETOPT_SHORT" --long "$GETOPT_LONG" -- "$@")
 # eval *can* be dangerous, see explanation here
@@ -297,35 +321,25 @@ while true; do
 	fi
 	
 	case "$1" in
+		-b | -c | -l | -h | --password | -s )
+            shift   ;;
 		-a )
 			ADD_ARGS+=("$2")
 			shift 2	;;
-		-b )
-			shift	;;
-		-c )
-			shift	;;
 		--directory )
 			DIR_POSITIONAL_ARG="$2"
 			shift 2	;;
 		-e )
 			EXTC_ARG="${2:=missing}"
 			shift 2	;;
-		-l )
-			shift	;;
-		-h )
-			shift	;;
-		--password )
-			shift	;;
 		-r )
 			REM_ARGS+=("${2%/}")
-			shift 2     ;;
-		-s )
-			shift	;;
+			shift 2 ;;
 		# -- means the end of the arguments; drop this, and break out of the while loop
-		--)
+		-- )
 			shift; break ;;
-	    *) >&2 echo Unsupported option: $1
-       	    usage ;;
+		* ) >&2 echo Unsupported option: $1
+			usage ;;
 	esac
 done
 
