@@ -1,6 +1,9 @@
 #!/usr/bin/bash
 
 CONFIGURATION_FILE='/etc/backUP.conf'
+MIN_BASH_VER='4.0'
+MIN_BORG_VER='1.2.3'
+MIN_COREUTIL_VER='7.0'
 DATE="$(date +%m-%d-%Y-%I:%M:%S-%p)"
 FILENAME=$(basename $0)
 IS_NUM_REGEX='^[1-9][0-9]*$'
@@ -9,7 +12,6 @@ GETOPT_LONG='directory:,password'
 
 usage(){
 >&2 cat << EOF
-
 License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
 
 This is free software; you are free to change and redistribute it.
@@ -223,17 +225,29 @@ borg_compact_and_prune() {
 }
 
 duplicate_borg_repo() {
-	# This function silently duplicates the data in borg backup to a second destination
-	# every time managebackups terminates cleanly
+	local primary_repo=$(realpath -mq "$BORG_REPO")	# strip excessive trailing slashes
+	primary_repo+='/'								# append single trailing slash - instructs rsync to copy *contents*
+	local secondary_repo=$(realpath -mq "$DUPLICATE_REPO_PATH")
 
-	# NOTE: the / after ${BORG_REPO} is actually very important!!!
-	# it instructs rsync to copy the *contents* of ${BORG_REPO} instead of the the directory
-	local primary_repo="${BORG_REPO%/}/"
-	
-	if [[ ! -z $DUPLICATE_REPO_PATH ]]; then
-		rsync -au --delete "$primary_repo" "$DUPLICATE_REPO_PATH" > /dev/null
+	CARRY_ON="false"
+	if [[ -d "$secondary_repo" ]]; then
+		# check if secondary_repo is a mountpoint
+		if awk '$1 !~ /^#/ && $2 ~ /^[/]/ {print $2}' /etc/fstab | grep -Fxq $secondary_repo; then
+			# mountpoint command provided by util-linux - checks if secondary_repo is mounted
+			if ! mountpoint -q "$secondary_repo"; then
+				echo -e "\nERROR: '$DUPLICATE_REPO_PATH' isn't mounted. BORG repo will not be duplicated.\n"
+			else
+				CARRY_ON="true"
+			fi
+		else
+			CARRY_ON="true"
+		fi
 	else
 		echo -e "\nWARN: Configuration option 'DUPLICATE_REPO_PATH' is unset. BORG repo will not be duplicated.\n"
+	fi
+	
+	if [[ "$CARRY_ON" == "true" ]]; then
+		rsync -au --delete "$primary_repo" "$secondary_repo" > /dev/null
 	fi
 }
 
@@ -274,14 +288,14 @@ get_password() {
 
 	borg info $BORG_REPO >/dev/null 2>&1
 	if [[ $? -ne 0 ]]; then
-		echo -e "\n\nYour password is incorrect. Exiting.\n"
+		echo -e "\n\nYour password for '$BORG_REPO' is incorrect. Exiting.\n"
 		exit 1
 	fi
 }
 
-{ printf '%s\n%s' "4.0" "$BASH_VERSION" | sort -C -V; } > /dev/null 2>&1	
+{ printf '%s\n%s' "$MIN_BASH_VER" "$BASH_VERSION" | sort -C -V; } > /dev/null 2>&1	
 if [[ $? -ne 0 ]]; then
-	printf '\n%s\n' "ERROR: $FILENAME depends on coreutils v7.0+ and Bash v4.0+. Your system is configured with"
+	printf '\n%s\n' "ERROR: $FILENAME depends on coreutils v${MIN_COREUTIL_VER}+ and Bash v${MIN_BASH_VER}+. Your system is configured with"
 	printf '%-11s%s\n' "Coreutils:" "$(whoami --version | head -n 1 | awk '{print $NF}')"
 	printf '%-11s%s\n\n' "Bash:" "$BASH_VERSION"
 	exit 1
@@ -292,26 +306,19 @@ getopt --test
 
 borg -V > /dev/null 2>&1
 	borg_install_check=$?
-{ printf '%s\n%s' "1.2.3" "$(borg -V | awk '{print $NF}')" | sort -C -V; } > /dev/null 2>&1
+{ printf '%s\n%s' "$MIN_BORG_VER" "$(borg -V | awk '{print $NF}')" | sort -C -V; } > /dev/null 2>&1
 	borg_version_check=$?
 
 if [[ $borg_install_check -ne 0 || $borg_version_check -ne 0 ]]; then
-	printf '\n%s\n' "ERROR: $FILENAME depends on BORG Backup v1.2.3+. Your system is configured with"
+	printf '\n%s\n' "ERROR: $FILENAME depends on BORG Backup v${MIN_BORG_VER}+. Your system is configured with"
 	printf '%-13s%s\n\n' "BORG Backup:" "$(borg -V | awk '{print $NF}')"
 	exit 1
 fi
 
 args=$(getopt -n "$FILENAME" -a -o "$GETOPT_SHORT" --long "$GETOPT_LONG" -- "$@")
-# eval *can* be dangerous, see explanation here
-#   - https://www.linuxquestions.org/questions/linux-desktop-74/alternative-to-eval-4175702722/#post6312000
-# part of this thread
-#   - https://www.linuxquestions.org/questions/linux-desktop-74/alternative-to-eval-4175702722/
-# it appears to be safe with the version of getopt included on my system, which seems to quote the positional
-# parameters and removes this danger, as explained in the post. Test on your system by echoing "$args" to the shell
 eval set -- ${args}
 typeset -A ARGS
 while true; do
-	# all long options will be excluded from ARGS
 	if [[ "${1:0:2}" != "--" ]]; then
 		ARGS["${1:1:1}"]=true
 	else
@@ -352,124 +359,17 @@ elif [[ $EUID -ne 0 ]]; then
 else
 	parse_config
 
-	[[ ! -z ${ARGS[password]} ]] && get_password
-	[[ ! -z ${ARGS[directory]} ]] && export EXTRACT_TO="$DIR_POSITIONAL_ARG"
-	[[ ! -z ${ARGS[r]} ]] && remove_from_backup_list "${REM_ARGS[@]}"
-	[[ ! -z ${ARGS[a]} ]] && append_to_backup_list "${ADD_ARGS[@]}"
-	[[ ! -z ${ARGS[b]} ]] && create_borg_backup
-	[[ ! -z ${ARGS[c]} ]] && borg_compact_and_prune
-	[[ ! -z ${ARGS[e]} ]] && restore_borg_backup "$EXTC_ARG"
-	[[ ! -z ${ARGS[l]} ]] && list_borg_backups
-	[[ ! -z ${ARGS[s]} ]] && print_database
+	[[ -n ${ARGS[password]} ]] && get_password
+	[[ -n ${ARGS[directory]} ]] && export EXTRACT_TO="$DIR_POSITIONAL_ARG"
+	[[ -n ${ARGS[r]} ]] && remove_from_backup_list "${REM_ARGS[@]}"
+	[[ -n ${ARGS[a]} ]] && append_to_backup_list "${ADD_ARGS[@]}"
+	[[ -n ${ARGS[b]} ]] && create_borg_backup
+	[[ -n ${ARGS[c]} ]] && borg_compact_and_prune
+	[[ -n ${ARGS[e]} ]] && restore_borg_backup "$EXTC_ARG"
+	[[ -n ${ARGS[l]} ]] && list_borg_backups
+	[[ -n ${ARGS[s]} ]] && print_database
 
 	duplicate_borg_repo
 fi
 
 exit 0
-
-# The functions below are depreciated, and written prior to integration of this script with borg backup for deduplication / storage maangement
-# They are preserved here in loving memory for posterity and learning
-
-remove_from_backup_list() {
-    if [[ ! -f "$1" && ! -d "$1" ]]; then
-        echo -e "\nERROR: Path '$1' doesn't seem to exist. Exiting.\n"
-        exit 1
-    fi
-
-    # normalize the input
-    file=$(readlink -e "$1")
-    if grep -Fxq "$file" $BACKUP_DB; then
-        echo -e "\nRemoving '$file' from '$BACKUP_DB'\n"
-        line=$(grep -nFx "$file" $BACKUP_DB | cut -f1 -d:)
-        sed -i "${line}d" $BACKUP_DB
-    else
-        echo -e "\nWARN: No match to '$file' found in '$BACKUP_DB'\n"
-    fi
-}
-
-restore_borg_backup() {
-    num_archives=$(borg list "$BORG_REPO" | wc -l)
-    if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_archives ]]; then
-        # function received a number that is less than or equal to the number of borg backups
-        # prompt for confirmation before extracting
-        list_borg_backups $1
-        while true; do
-            read -p "Is this the archive you want to restore? [Y/n] " user_input
-            user_input=${user_input:-Y}
-            case $user_input in
-                [Yy]es | [Yy] )
-					borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
-                    install -d -m 0755 -o "$USER" -g "$USER" "$EXTRACT_TO"
-                    echo -e "\nAttempting to extract '$borg_archive' to $EXTRACT_TO.\n"
-                    workingdir=$(pwd)
-                    cd $EXTRACT_TO
-                    borg extract $BORG_REPO::$borg_archive 2> /dev/null
-                    exit_code=$?
-                    if [[ $exit_code -ne 0 ]]; then
-                        echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
-                        echo -e "Use '$FILENAME --list' to display a list of all valid archives.\n"
-                    else
-                        echo -e "Success! Files extracted to $EXTRACT_TO.\n"
-                    fi
-                        cd $workingdir
-                    break
-                    ;;
-                [Nn]o | [Nn] )
-                    read -p "Please enter the archive number or name you would like to restore: " user_input
-                    restore_borg_backup $user_input
-                    break
-                    ;;
-                * )
-                    echo -e "\nINPUT ERROR: Valid responses are [Y/n].\n"
-                    ;;
-            esac
-        done
-    else
-        install -d -m 0755 -o "$USER" -g "$USER" "$EXTRACT_TO"
-        echo -e "\nAttempting to extract '$1' to $EXTRACT_TO.\n"
-        workingdir=$(pwd)
-        cd $EXTRACT_TO
-        borg extract $BORG_REPO::$1 2> /dev/null
-        exit_code=$?
-        if [[ $exit_code -ne 0 ]]; then
-            echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
-            echo -e "Use '$FILENAME --list' to display a list of all valid archives.\n"
-        else
-            echo -e "\nSuccess! Files extracted to $EXTRACT_TO.\n"
-        fi
-        cd $workingdir
-    fi
-}
-
-
-create_backup() {
-        # This function is probably obsolete with borg backup... but should be preserved bcause a lot of effort went in to creating it
-        # See create_borg_backup function for a backup solution that doesn't duplicate files that have already been backed up without
-        # recent modification.
-        echo -e "\nCreating new backup '$DATE.tar.gpg' in '$BORG_REPO'\n"
-
-        { parse_files && parse_directories; } | sort -u | \
-        tar -c --no-recursion --verbatim-files-from -T - -f - | \
-        gpg --pinentry-mode loopback --passphrase $BORG_PASSPHRASE --symmetric  -o "$BORG_REPO/$DATE.tar.gpg"
-}
-
-restore_backup() {
-        if [[ ! -f "$1" && ! -d "$1" ]]; then
-                echo -e "\nERROR: Path '$1' doesn't seem to exist. Exiting.\n"
-                exit 1
-        fi
-
-        # normalize the input
-        file=$(readlink -e "$1")
-
-        if [[ $file != *.tar.gpg ]]; then
-                echo -e "\nERROR: '$(basename "$file")' is not a valid backup. Please provide a '.tar.gpg' extension."
-                exit 1
-        else
-                install -d -m 0755 -o "$USER" -g "$USER" "$EXTRACT_TO"
-                echo -e "\nExtracting '$FILENAME' to $EXTRACT_TO.\n"
-
-                gpg --pinentry-mode loopback --passphrase $BORG_PASSPHRASE --output - --decrypt $file | \
-                tar -xf - -C "$EXTRACT_TO" > /dev/null
-        fi
-}
