@@ -7,8 +7,9 @@ MIN_COREUTIL_VER='7.0'
 DATE="$(date +%m-%d-%Y-%I:%M:%S-%p)"
 FILENAME=$(basename $0)
 IS_NUM_REGEX='^[1-9][0-9]*$'
+REPO_STR='This is a Borg Backup repository.'
 GETOPT_SHORT='a:e:r:hblcs'
-GETOPT_LONG='directory:,password'
+GETOPT_LONG='dest:,repo:,pass'
 
 usage(){
 >&2 cat << EOF
@@ -25,22 +26,23 @@ Usage:
  $FILENAME [option] <file>
  
 Options:
- -a <file>      : Add a file to the 'database'
- -b             : Backup 'database' files with borg backup
- -c             : Cleanup backup files
- -e             : Extract a borg backup ( Default to ~/temp )
-    --directory : Set extraction directory
- -l             : List all borg backups
- -h             : Display usage information
- -r <file>      : Delete a file from the 'database'
- -s             : Show all paths monitored by $FILENAME
-    --password  : Set the BORG Backup password
+     -a <path> : Add <path> to the 'database'
+     -b        : Backup all 'database' entries with BORG backup
+     -c        : Prune and then cleanup BORG backups
+     -e        : Extract a BORG backup ( Defaults to ~/temp )
+ --dest <path> : Set extraction directory ( Only applies to -e flag )
+     -l        : List all BORG backups
+     -h        : Display usage information
+     -r <path> : Delete <path> from the 'database'
+     -s        : Show all paths monitored by $FILENAME
+ --pass        : Prompts for the BORG Backup passphrase
+ --repo <path> : Sets the BORG repo to <path>
 
 Caveats:
  1) A new -a or -r flag must preceed each path given, something like:
-      $FILENAME -a <file1> -a <file2> 
+      $FILENAME -a <path-1> -a <path-2> 
 
- 2) White space in <file> must be escaped or quoted for processing
+ 2) White space in <path> must be escaped or quoted for processing
 
 Configuration options are loaded from '$CONFIGURATION_FILE'
 
@@ -58,8 +60,8 @@ parse_config() {
 		[BORG_PASSPHRASE]=""
 		[BORG_REPO]=""
 		[BACKUP_DB]=""
-		[EXTRACT_TO]="$(getent passwd $SUDO_USER | cut -d: -f6)/temp"
-		[USER]="$SUDO_USER"
+		[SOME_USER]="$SUDO_USER"
+		[EXTRACT_TO]=""
 		[DUPLICATE_REPO_PATH]=""
 	)
 	
@@ -71,13 +73,18 @@ parse_config() {
 			config[$varname]=$(echo "$line" | cut -d '=' -f 2-)
 		fi
 	done < $CONFIGURATION_FILE
-	
+
+	export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes	
 	export BORG_PASSPHRASE=${config[BORG_PASSPHRASE]}
-	export BORG_REPO=${config[BORG_REPO]}
+	validate_repo "${config[BORG_REPO]}" && export BORG_REPO=${config[BORG_REPO]}
 	export BACKUP_DB=${config[BACKUP_DB]}
-	export EXTRACT_TO=${config[EXTRACT_TO]}
-	export USER=${config[USER]}
-	export DUPLICATE_REPO_PATH=${config[DUPLICATE_REPO_PATH]}
+	export SOME_USER=${config[SOME_USER]}
+	if [[ -z ${config[EXTRACT_TO]} ]]; then
+		export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
+	else
+		export EXTRACT_TO=${config[EXTRACT_TO]}
+	fi
+	validate_duplicate "${config[DUPLICATE_REPO_PATH]}" && export DUPLICATE_REPO_PATH=${config[DUPLICATE_REPO_PATH]}
 }
 
 append_to_backup_list() {
@@ -108,7 +115,7 @@ remove_from_backup_list() {
 
 	for argument in "$@"; do
 		if [[ $argument =~ $IS_NUM_REGEX && $argument -le $num_lines ]]; then
-			# function received a number that is less than or equal to the number of borg backups
+			# function received a number less than or equal to the number of borg backups
 			db_entry=$(sed -n "$argument{p;q}" $BACKUP_DB)
 			db_entry_line_num=$argument
 		elif grep -Fxq "$argument" $BACKUP_DB; then
@@ -116,6 +123,7 @@ remove_from_backup_list() {
 			db_entry=$argument
 			db_entry_line_num=$(grep -nFx "$argument" $BACKUP_DB | cut -f1 -d:)
 		else
+			# function does not recognize the argument received
 			echo -e "\nERROR: No match to '$argument' found in '$BACKUP_DB'\n"
 			exit 1
 		fi
@@ -129,9 +137,8 @@ remove_from_backup_list() {
 		sed_string+="${key}d;"
 	done
 	echo -en "\n"
-	sed_string="${sed_string%;}"
 	
-	sed -i "$sed_string" $BACKUP_DB
+	sed -i "${sed_string%;}" $BACKUP_DB
 }
 
 parse_parents() {
@@ -147,8 +154,7 @@ parse_parents() {
 	# Stolen from: https://serverfault.com/questions/877254/tar-does-not-retain-directory-permissions
 	awk -F/ '{ d=$1; for (i=2; i <= NF; i++) { print d; d=d "/" $i }; print d }' | \
 	awk '{ if (index(old,$0 "/") != 1) { old=$0; print } }' | \
-	sed '/^[[:space:]]*$/d' | \
-	sed '/\/$/d'
+	sed -e '/^[[:space:]]*$/d' -e '/\/$/d'
 }
 
 recurse_directories() {
@@ -168,10 +174,10 @@ create_borg_backup() {
 }
 
 list_borg_backups() {
-	printf "%s\n%-8s%s\n" "" "#" "ARCHIVE NAME"
+	printf "\n%-8s%s\n" "#" "ARCHIVE NAME"
 	printf "%s%s\n" "------  ------------"
 	counter=0
-	borg list "$BORG_REPO" | \
+	borg list "$BORG_REPO" 2>/dev/null | \
 		while read line; do
 			((counter+=1))
 			archive_name=$(echo $line | awk '{print $1}')
@@ -182,14 +188,14 @@ list_borg_backups() {
 			else
 				printf "%-8s%s\n" "$counter" "$archive_name"
 			fi
-		done
+		done 
 }
 
 restore_borg_backup() {
 	num_archives=$(borg list "$BORG_REPO" | wc -l)
 	# Don't change permissions of /
 	if [[ ! -d "$EXTRACT_TO" ]]; then
-		install -d -m 0755 -o "$USER" -g "$USER" "$EXTRACT_TO"
+		install -d -m 0755 -o "$SOME_USER" -g "$SOME_USER" "$EXTRACT_TO"
 		if [[ $? -ne 0 ]]; then 
 			# This will probably never be displayed because the function requires root priv.
 			echo -e "\nERROR: A problem occurred during extraction."
@@ -220,8 +226,8 @@ restore_borg_backup() {
 }
 
 borg_compact_and_prune() {
-	borg prune --list --keep-daily=7 --keep-weekly=4 --keep-monthly=12 --keep-yearly=1 $BORG_REPO 
-	borg compact $BORG_REPO
+	borg prune --list --keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO"
+	borg compact "$BORG_REPO"
 }
 
 duplicate_borg_repo() {
@@ -255,7 +261,6 @@ print_database() {
 	printf "\n%-8s%-8s%s\n" "#" "TYPE" "PATH"
 	printf "%s%s%s\n" "------  ------  ------"
 	counter=0
-	cat $BACKUP_DB | \
 		while read line; do
 			if [[ -d $line ]]; then
 				entry_type="Folder"
@@ -271,7 +276,7 @@ print_database() {
 			else
 				printf "%-8s%-8s%s\n" "$counter" "$entry_type" "$line"
 			fi
-		done
+		done < $BACKUP_DB
 }
 
 get_password() {
@@ -286,9 +291,39 @@ get_password() {
 		get_password
 	fi
 
-	borg info $BORG_REPO >/dev/null 2>&1
+	borg info "$BORG_REPO" > /dev/null 2>&1
 	if [[ $? -ne 0 ]]; then
 		echo -e "\n\nYour password for '$BORG_REPO' is incorrect. Exiting.\n"
+		exit 1
+	fi
+}
+
+validate_repo() {
+	if ! [[ -f "${1}/README" && "$(head -n 1 "${1}/README")" == "$REPO_STR" ]]; then
+		# according to https://borgbackup.readthedocs.io/en/stable/internals/data-structures.html#repository
+		# all BORG repositories contain a "README" file with the string "This is a Borg Backup repository."
+		echo -e "\nERROR: The path, '$1' does not contain a valid BORG repository. Exiting.\n"
+		exit 2
+	else
+		return 0
+	fi
+}
+
+validate_duplicate() {
+	if [[ ! -d "$1" ]]; then
+		# argument is not a valid directory
+		echo -e "\nERROR: Duplication path '$1' is not a valid directory\n"
+		exit 1
+	elif [[ $(ls -A "$1" | wc -l) -eq 0 ]]; then
+		# empty directories are OK
+		return 0
+	elif [[ -f "${1}/README" && "$(head -n 1 "${1}/README")" == "$REPO_STR" ]]; then
+		# according to https://borgbackup.readthedocs.io/en/stable/internals/data-structures.html#repository
+		# all BORG repositories contain a "README" file with the string "This is a Borg Backup repository."
+		return 0
+	else
+		# duplication directory is probably not a BORG repo, and we don't want to delete everything inside of it
+		echo -e "\nERROR: Duplication path '$1' is not empty, or not a valid BORG repo.\n"
 		exit 1
 	fi
 }
@@ -328,14 +363,17 @@ while true; do
 	fi
 	
 	case "$1" in
-		-b | -c | -l | -h | --password | -s )
-            shift   ;;
+		-b | -c | -l | -h | --pass | -s )
+			shift   ;;
 		-a )
 			ADD_ARGS+=("$2")
 			shift 2	;;
-		--directory )
+		--dest )
 			DIR_POSITIONAL_ARG="$2"
 			shift 2	;;
+		--repo )
+			REPO_ARG="$2"
+			shift 2 ;;
 		-e )
 			EXTC_ARG="${2:=missing}"
 			shift 2	;;
@@ -359,8 +397,9 @@ elif [[ $EUID -ne 0 ]]; then
 else
 	parse_config
 
-	[[ -n ${ARGS[password]} ]] && get_password
-	[[ -n ${ARGS[directory]} ]] && export EXTRACT_TO="$DIR_POSITIONAL_ARG"
+	[[ -n ${ARGS[repo]} ]] && validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
+	[[ -n ${ARGS[pass]} ]] && get_password
+	[[ -n ${ARGS[dest]} ]] && export EXTRACT_TO="$DIR_POSITIONAL_ARG"
 	[[ -n ${ARGS[r]} ]] && remove_from_backup_list "${REM_ARGS[@]}"
 	[[ -n ${ARGS[a]} ]] && append_to_backup_list "${ADD_ARGS[@]}"
 	[[ -n ${ARGS[b]} ]] && create_borg_backup
