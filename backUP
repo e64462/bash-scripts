@@ -170,7 +170,7 @@ create_borg_backup() {
 	echo -e "\nCreating new backup '$DATE' in '$BORG_REPO'\n"
 
 	{ parse_parents && recurse_directories; } | sort -u | \
-		borg create --paths-from-stdin "$BORG_REPO::$DATE"
+		borg create --paths-from-stdin "$BORG_REPO::$DATE" 2>/dev/null
 }
 
 list_borg_backups() {
@@ -192,20 +192,20 @@ list_borg_backups() {
 }
 
 restore_borg_backup() {
-	num_archives=$(borg list "$BORG_REPO" | wc -l)
+	num_archives=$(borg list "$BORG_REPO" 2>/dev/null | wc -l)
 	# Don't change permissions of /
 	if [[ ! -d "$EXTRACT_TO" ]]; then
 		install -d -m 0755 -o "$SOME_USER" -g "$SOME_USER" "$EXTRACT_TO"
 		if [[ $? -ne 0 ]]; then 
 			# This will probably never be displayed because the function requires root priv.
 			echo -e "\nERROR: A problem occurred during extraction."
-			echo -e "Try '$FILENAME --directory /path' or check '$EXTRACT_TO'\n"
+			echo -e "Try '$FILENAME --dest /path' or check '$EXTRACT_TO'\n"
 		fi
 	fi
 
 	if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_archives ]]; then
 		# function received a number that is less than or equal to the number of borg backups
-		borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
+		borg_archive=$(borg list "$BORG_REPO" 2>/dev/null | sed -n "$1{p;q}" | awk '{print $1}')
 	else	
 		borg_archive=$1
 	fi
@@ -213,12 +213,10 @@ restore_borg_backup() {
    	echo -e "\nExtracting '$borg_archive' to '$EXTRACT_TO'.\n"
 	workingdir=$(pwd)
 	cd "$EXTRACT_TO"
-	borg extract $BORG_REPO::$borg_archive 2> /dev/null
-	exit_code=$?
-
-	if [[ $exit_code -ne 0 ]]; then
+	borg extract $BORG_REPO::$borg_archive 2>/dev/null
+	if [[ $? -ne 0 ]]; then
 		echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
-		echo -e "Use '$FILENAME --list' to display a list of all valid archives.\n"
+		echo -e "Use '$FILENAME -l' to display a list of all valid archives.\n"
 	else
 		echo -e "Success! Files extracted to $EXTRACT_TO.\n"
 	fi
@@ -226,14 +224,13 @@ restore_borg_backup() {
 }
 
 borg_compact_and_prune() {
-	borg prune --list --keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO"
-	borg compact "$BORG_REPO"
+	borg prune --list --keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO" 2>/dev/null	
+	borg compact "$BORG_REPO" 2>/dev/null
 }
 
 duplicate_borg_repo() {
-	local primary_repo=$(realpath -mq "$BORG_REPO")	# strip excessive trailing slashes
-	primary_repo+='/'								# append single trailing slash - instructs rsync to copy *contents*
-	local secondary_repo=$(realpath -mq "$DUPLICATE_REPO_PATH")
+	local primary_repo="$(realpath -mq "$BORG_REPO")/"	# strip excessive trailing slashes
+	local secondary_repo="$(realpath -mq "$DUPLICATE_REPO_PATH")"
 
 	CARRY_ON="false"
 	if [[ -d "$secondary_repo" ]]; then
@@ -252,8 +249,10 @@ duplicate_borg_repo() {
 		echo -e "\nWARN: Configuration option 'DUPLICATE_REPO_PATH' is unset. BORG repo will not be duplicated.\n"
 	fi
 	
-	if [[ "$CARRY_ON" == "true" ]]; then
+	if [[ "$CARRY_ON" == "true" ]] && validate_repo "$primary_repo"; then
 		rsync -au --delete "$primary_repo" "$secondary_repo" > /dev/null
+	else
+		ecoh -e "\nERROR: Something went wrong. BORG repo '$primary_repo' will not be duplicated to '$secondary_repo'\n"
 	fi
 }
 
@@ -397,7 +396,8 @@ elif [[ $EUID -ne 0 ]]; then
 else
 	parse_config
 
-	[[ -n ${ARGS[repo]} ]] && validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
+	[[ -n ${ARGS[repo]} ]] && REPO_ARG="$(readlink -e "$REPO_ARG")" && \
+							validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
 	[[ -n ${ARGS[pass]} ]] && get_password
 	[[ -n ${ARGS[dest]} ]] && export EXTRACT_TO="$DIR_POSITIONAL_ARG"
 	[[ -n ${ARGS[r]} ]] && remove_from_backup_list "${REM_ARGS[@]}"
