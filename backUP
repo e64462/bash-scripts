@@ -9,7 +9,9 @@ FILENAME=$(basename $0)
 IS_NUM_REGEX='^[1-9][0-9]*$'
 REPO_STR='This is a Borg Backup repository.'
 GETOPT_SHORT='a:e:r:hblcs'
-GETOPT_LONG='dest:,repo:,pass'
+GETOPT_LONG='dest:,repo:,pass,dupe:'
+declare -a dupe_paths
+
 
 usage(){
 >&2 cat << EOF
@@ -29,18 +31,19 @@ Options:
      -a <path> : Add <path> to the 'database'
      -b        : Backup all 'database' entries with BORG backup
      -c        : Prune and then cleanup BORG backups
+ --dupe <path> : Duplicate to <path> ( No limit to number of calls )
      -e        : Extract a BORG backup ( Defaults to ~/temp )
  --dest <path> : Set extraction directory ( Only applies to -e flag )
      -l        : List all BORG backups
      -h        : Display usage information
-     -r <path> : Delete <path> from the 'database'
+     -r <path> : Remove <path> from the 'database'
      -s        : Show all paths monitored by $FILENAME
  --pass        : Prompts for the BORG Backup passphrase
  --repo <path> : Sets the BORG repo to <path>
 
 Caveats:
  1) A new -a or -r flag must preceed each path given, something like:
-      $FILENAME -a <path-1> -a <path-2> 
+	  $FILENAME -a <path-1> -a <path-2> 
 
  2) White space in <path> must be escaped or quoted for processing
 
@@ -54,37 +57,48 @@ exit 1
 }
 
 parse_config() {
+	export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
 	typeset -A config
-	
+
 	config=(
 		[BORG_PASSPHRASE]=""
 		[BORG_REPO]=""
 		[BACKUP_DB]=""
 		[SOME_USER]="$SUDO_USER"
 		[EXTRACT_TO]=""
-		[DUPLICATE_REPO_PATH]=""
 	)
-	
-	while read line; do
-		if [[ "$line" =~ ^#.*$ ]]; then
-			continue
-		elif echo $line | grep -F = &>/dev/null; then
-			varname=$(echo "$line" | cut -d '=' -f 1)
-			config[$varname]=$(echo "$line" | cut -d '=' -f 2-)
-		fi
-	done < $CONFIGURATION_FILE
 
-	export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes	
-	export BORG_PASSPHRASE=${config[BORG_PASSPHRASE]}
-	validate_repo "${config[BORG_REPO]}" && export BORG_REPO=${config[BORG_REPO]}
-	export BACKUP_DB=${config[BACKUP_DB]}
-	export SOME_USER=${config[SOME_USER]}
-	if [[ -z ${config[EXTRACT_TO]} ]]; then
+	while read line; do
+		[[ "$line" =~ ^#.*$ ]] && continue
+
+		if echo $line | grep -F = &>/dev/null; then
+			varname=$(echo "$line" | cut -d '=' -f 1)
+			value=$(echo "$line" | cut -d '=' -f 2-)
+			case "$varname" in
+				DUPLICATE_REPO_PATH )
+					tval="$(realpath -mq "$value")"
+					validate_duplicate "$tval" && dupe_paths+=("$tval")
+					;;
+				BORG_REPO )
+					validate_repo "$value" && config["$varname"]="$value"
+					;;
+				* )
+					config["$varname"]="$value"
+					;;
+			esac
+		fi
+		
+	done < "$CONFIGURATION_FILE"
+
+	export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
+	export BORG_REPO="${config[BORG_REPO]}"
+	export BACKUP_DB="${config[BACKUP_DB]}"
+	export SOME_USER="${config[SOME_USER]}"
+	if [[ -z "${config[EXTRACT_TO]}" ]]; then
 		export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
 	else
-		export EXTRACT_TO=${config[EXTRACT_TO]}
+		export EXTRACT_TO="${config[EXTRACT_TO]}"
 	fi
-	validate_duplicate "${config[DUPLICATE_REPO_PATH]}" && export DUPLICATE_REPO_PATH=${config[DUPLICATE_REPO_PATH]}
 }
 
 append_to_backup_list() {
@@ -98,7 +112,7 @@ append_to_backup_list() {
 	for argument in "$@"; do
 		# normalize the input
 		file=$(readlink -e "$argument")
-  		if ! grep -Fxq "$file" $BACKUP_DB; then
+		if ! grep -Fxq "$file" $BACKUP_DB; then
 			echo "Appending '$file' to end of '$BACKUP_DB'"
 			echo "$file" >> $BACKUP_DB
 		else
@@ -210,7 +224,7 @@ restore_borg_backup() {
 		borg_archive=$1
 	fi
 
-   	echo -e "\nExtracting '$borg_archive' to '$EXTRACT_TO'.\n"
+	echo -e "\nExtracting '$borg_archive' to '$EXTRACT_TO'.\n"
 	workingdir=$(pwd)
 	cd "$EXTRACT_TO"
 	borg extract $BORG_REPO::$borg_archive 2>/dev/null
@@ -230,29 +244,13 @@ borg_compact_and_prune() {
 
 duplicate_borg_repo() {
 	local primary_repo="$(realpath -mq "$BORG_REPO")/"	# strip excessive trailing slashes
-	local secondary_repo="$(realpath -mq "$DUPLICATE_REPO_PATH")"
 
-	CARRY_ON="false"
-	if [[ -d "$secondary_repo" ]]; then
-		# check if secondary_repo is a mountpoint
-		if awk '$1 !~ /^#/ && $2 ~ /^[/]/ {print $2}' /etc/fstab | grep -Fxq $secondary_repo; then
-			# mountpoint command provided by util-linux - checks if secondary_repo is mounted
-			if ! mountpoint -q "$secondary_repo"; then
-				echo -e "\nERROR: '$DUPLICATE_REPO_PATH' isn't mounted. BORG repo will not be duplicated.\n"
-			else
-				CARRY_ON="true"
-			fi
-		else
-			CARRY_ON="true"
-		fi
+	if [[ ${#dupe_paths[@]} -gt 0 ]]; then
+		for secondary_repo in "${dupe_paths[@]}"; do
+			rsync -au --delete "$primary_repo" "$secondary_repo"  > /dev/null
+		done
 	else
-		echo -e "\nWARN: Configuration option 'DUPLICATE_REPO_PATH' is unset. BORG repo will not be duplicated.\n"
-	fi
-	
-	if [[ "$CARRY_ON" == "true" ]] && validate_repo "$primary_repo"; then
-		rsync -au --delete "$primary_repo" "$secondary_repo" > /dev/null
-	else
-		ecoh -e "\nERROR: Something went wrong. BORG repo '$primary_repo' will not be duplicated to '$secondary_repo'\n"
+		echo -e "\nWARN: No duplication paths specified. '$primary_repo' will not be duplicated\n"
 	fi
 }
 
@@ -309,21 +307,33 @@ validate_repo() {
 }
 
 validate_duplicate() {
-	if [[ ! -d "$1" ]]; then
+	# The checks in this function are actually pretty important... duplication is performed with rsync --delete
+	# so anything in the destination directory will be wiped out if we're not careful... and this script runs as
+	# root, so we don't want to erase all of /!
+
+	local duplicate_repo_path="$1"
+
+	if [[ ! -d "$duplicate_repo_path" ]]; then
 		# argument is not a valid directory
-		echo -e "\nERROR: Duplication path '$1' is not a valid directory\n"
-		exit 1
-	elif [[ $(ls -A "$1" | wc -l) -eq 0 ]]; then
+		echo -e "\nWARN: Duplication path '$duplicate_repo_path' is not a valid directory and will be skipped.\n"
+		return 1
+	elif awk '$1 !~ /^#/ && $2 ~ /^[/]/ {print $2}' /etc/fstab | grep -Fxq $duplicate_repo_path; then
+        # mountpoint command provided by util-linux - checks if duplicate_repo_path is mounted
+        if ! mountpoint -q "$duplicate_repo_path"; then
+            echo -e "\nWARN: '$duplicate_repo_path' isn't mounted and will be skipped.\n"
+            return 1
+        fi
+	elif [[ $(ls -A "$duplicate_repo_path" | wc -l) -eq 0 ]]; then
 		# empty directories are OK
 		return 0
-	elif [[ -f "${1}/README" && "$(head -n 1 "${1}/README")" == "$REPO_STR" ]]; then
+	elif [[ -f "${duplicate_repo_path}/README" && "$(head -n 1 "${duplicate_repo_path}/README")" == "$REPO_STR" ]]; then
 		# according to https://borgbackup.readthedocs.io/en/stable/internals/data-structures.html#repository
 		# all BORG repositories contain a "README" file with the string "This is a Borg Backup repository."
 		return 0
 	else
 		# duplication directory is probably not a BORG repo, and we don't want to delete everything inside of it
-		echo -e "\nERROR: Duplication path '$1' is not empty, or not a valid BORG repo.\n"
-		exit 1
+		echo -e "\nWARN: Duplication path '$duplicate_repo_path' is either non-empty or not a BORG repo and will be skipped.\n"
+		return 1
 	fi
 }
 
@@ -363,7 +373,7 @@ while true; do
 	
 	case "$1" in
 		-b | -c | -l | -h | --pass | -s )
-			shift   ;;
+			shift	;;
 		-a )
 			ADD_ARGS+=("$2")
 			shift 2	;;
@@ -373,6 +383,10 @@ while true; do
 		--repo )
 			REPO_ARG="$2"
 			shift 2 ;;
+		--dupe )
+			tval="$(realpath -mq "$2")"
+			validate_duplicate "$tval" && dupe_paths+=("$tval")
+			shift 2	;;
 		-e )
 			EXTC_ARG="${2:=missing}"
 			shift 2	;;
@@ -392,7 +406,7 @@ if [[ ${ARGS[h]} || ${#ARGS[*]} -eq 0 ]]; then
 	exit 0
 elif [[ $EUID -ne 0 ]]; then
 	echo -e "\n$FILENAME requires sudo privileges.\n"
-    exit 1
+	exit 1
 else
 	parse_config
 
