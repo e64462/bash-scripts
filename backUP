@@ -56,50 +56,64 @@ EOF
 exit 1
 }
 
-parse_config() {
-	export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
-	typeset -A config
-
-	config=(
-		[BORG_PASSPHRASE]=""
-		[BORG_REPO]=""
-		[BACKUP_DB]=""
-		[SOME_USER]="$SUDO_USER"
-		[EXTRACT_TO]=""
-	)
-
-	while read line; do
-		[[ "$line" =~ ^#.*$ ]] && continue
-
-		if echo $line | grep -F = &>/dev/null; then
-			varname=$(echo "$line" | cut -d '=' -f 1)
-			value=$(echo "$line" | cut -d '=' -f 2-)
-			case "$varname" in
-				DUPLICATE_REPO_PATH )
-					tval="$(realpath -mq "$value")"
-					validate_duplicate "$tval" && dupe_paths+=("$tval")
-					;;
-				BORG_REPO )
-					validate_repo "$value" && config["$varname"]="$value"
-					;;
-				* )
-					config["$varname"]="$value"
-					;;
-			esac
-		fi
-		
-	done < "$CONFIGURATION_FILE"
-
-	export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
-	export BORG_REPO="${config[BORG_REPO]}"
-	export BACKUP_DB="${config[BACKUP_DB]}"
-	export SOME_USER="${config[SOME_USER]}"
-	if [[ -z "${config[EXTRACT_TO]}" ]]; then
-		export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
-	else
-		export EXTRACT_TO="${config[EXTRACT_TO]}"
-	fi
+grab_key() {
+	echo "$1" | awk -F'=' '{print $1}' | \
+		sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
+
+grab_value() {
+	echo "$1" | awk -F'=' '{print $2}' | \
+		sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+		-e 's/^"\|"$//g' \
+		-e 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+parse_config() {
+    export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
+    typeset -A config
+
+    config=(
+        [BORG_PASSPHRASE]=""
+        [BORG_REPO]=""
+        [BACKUP_DB]=""
+        [SOME_USER]="$SUDO_USER"
+        [EXTRACT_TO]=""
+    )
+
+    while read line; do
+        [[ "$line" =~ ^#.*$ ]] && continue
+
+        if echo "$line" | grep -F = &>/dev/null; then
+            varname="$(grab_key "$line")"
+            value="$(grab_value "$line")"
+            case "$varname" in
+                DUPLICATE_REPO_PATH )
+                    tval="$(realpath -mq "$value")"
+                    validate_duplicate "$tval" && dupe_paths+=("$tval")
+                    ;;
+                BORG_REPO )
+                    validate_repo "$value" && config["$varname"]="$value"
+                    ;;
+                * )
+                    config["$varname"]="$value"
+                    ;;
+            esac
+        fi
+
+    done < "$CONFIGURATION_FILE"
+
+    export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
+    export BORG_REPO="${config[BORG_REPO]}"
+    export BACKUP_DB="${config[BACKUP_DB]}"
+    export SOME_USER="${config[SOME_USER]}"
+    if [[ -z "${config[EXTRACT_TO]}" ]]; then
+        export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
+    else
+        export EXTRACT_TO="${config[EXTRACT_TO]}"
+    fi
+}
+
+
 
 append_to_backup_list() {
 	for argument in "$@"; do 
