@@ -1,7 +1,7 @@
 #!/bin/bash
 
-SMOL_OPTS="a:e:r:hblcs"
-LONG_OPTS="dest:,repo:,pass,dupe:,conf:"
+SMOL_OPTS="a:bc"
+LONG_OPTS="alpha,beta:,gamma"
 
 validate_option() {
 	# Function returns 0 if option is valid and requires arguments
@@ -64,7 +64,7 @@ validate_option() {
 args2array() {
 	declare -n __arr=$1 && shift
 	
-	local __exitcode
+	local __exitcode __ctr=0 __i __exitcode
 
 	while (( $# > 0 )); do	
 #		echo "first positional is '$1'"
@@ -72,15 +72,14 @@ args2array() {
 			# we're working with an option
 #			echo "searching optstrings for '${1//-/}'"
 			validate_option "${1//-/}"
-			local __exitcode=$?
+			__exitcode=$?
 			if [[ $__exitcode -gt 1 ]]; then
 				echo "error: option '$1' is not a valid option"
 				exit $__exitcode
 			else
 #				echo "hyphen-stripped param is: '${1//-/}' and __arr[${1//-/}] is '${__arr[${1//-/}]}'"
 				if [[ $__exitcode -eq 0 ]]; then
-					local __ctr=0
-					local __i
+					__ctr=0
 					for __i in "${@:2}"; do
 						if [[ ${__i:0:1} == "-" ]]; then
 							break
@@ -93,7 +92,7 @@ args2array() {
 					done
 					if [[ $__ctr -eq 0 ]]; then
 						echo "error: option '$1' requires an argument"
-						exit 2
+						exit 1
 					else
 #						echo "__ctr is '$__ctr'"
 						shift $__ctr
@@ -111,5 +110,48 @@ declare -A associative_array # must be declared BEFORE function call
 
 args2array associative_array "$@"
 
+# Print the key=value pairs
 for key in "${!associative_array[@]}"; do
 	printf "%s=%s\n" "$key" "'${associative_array[$key]% }'"
+done
+
+# -----------------------------------------------------------------------
+# EXAMPLE-1 USAGE 
+
+# $ args2array -a arg-1 arg\ 2 "arg 3" --alpha --beta arg -a arg-4 -b
+# beta=''arg''
+# alpha=''
+# b=''
+# a=''arg-1' 'arg 2' 'arg 3' 'arg-4''
+
+# $ echo $?
+# 0
+
+# -----------------------------------------------------------------------
+# EXAMPLE-2 USAGE
+
+# $ args2array -a arg-1 -f
+# error: option '-f' is not a valid option
+
+# $ echo $?
+# 2
+
+# -----------------------------------------------------------------------
+# EXAMPLE-3 USAGE
+
+# $ args2array -a
+# error: option '-a' requires an argument
+
+# $ echo $?
+# 1
+
+# ------------------------------------------------------------------------
+# EXAMPLE-4 USAGE
+
+# $ args2array --beta
+# error: option '--beta' requires an argument
+
+# echo $?
+# 1
+
+# ------------------------------------------------------------------------
