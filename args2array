@@ -1,0 +1,115 @@
+#!/bin/bash
+
+SMOL_OPTS="a:e:r:hblcs"
+LONG_OPTS="dest:,repo:,pass,dupe:,conf:"
+
+validate_option() {
+	# Function returns 0 if option is valid and requires arguments
+	# Function returns 1 if option is valid and does not require an argument
+	# Function returns 2 if option is invalid
+
+	local opt="$1"		# option to search for
+	local lgth=${#opt}
+
+	local goffset 
+	if [[ $lgth -eq 1 ]]; then
+		# opt is short
+		local optstr=$SMOL_OPTS
+		goffset=${optstr%%$opt*}
+		goffset=${#goffset}
+		if [[ $goffset -lt ${#optstr} ]]; then
+			# a match was found
+			if [[ "${optstr:$(( goffset + lgth )):1}" == ":" ]]; then
+				# the option requires an argument
+				return 0
+			else
+				return 1
+			fi
+		fi
+	else # opt is long
+		local optstr="$LONG_OPTS"
+		local lastchar="${optstr: -1}"
+		local firstchar="${optstr:0:1}"
+		local offsetadjust=0
+	
+		[[ "$firstchar" != "," ]] && optstr=",$optstr" && ((offsetadjust++))
+		[[ "$lastchar" != "," ]] && optstr="${optstr},"
+	
+		local fullstring_matches=(",${opt}," ",${opt}:,")
+		
+		local match
+		for match in "${fullstring_matches[@]}"	; do
+			goffset=${optstr%%$match*}
+			goffset=${#goffset}
+	
+			if [[ $goffset -lt ${#optstr} ]]; then
+				# a match was found
+				((goffset++))
+				[[ "$firstchar" != "," ]] && ((goffset--))
+				if [[ "${match: -2:1}" == ":" ]]; then
+					# the option requires an argument
+					return 0
+				else
+					# the option does not require any arguments
+					return 1
+				fi
+			else
+				goffset=$(( ${#optstr} - offsetadjust ))			
+			fi
+		done
+	fi
+	return 2
+}
+
+args2array() {
+	declare -n __arr=$1 && shift
+	
+	local __exitcode
+
+	while (( $# > 0 )); do	
+#		echo "first positional is '$1'"
+		if [[ ${1:0:1} == "-" ]]; then
+			# we're working with an option
+#			echo "searching optstrings for '${1//-/}'"
+			validate_option "${1//-/}"
+			local __exitcode=$?
+			if [[ $__exitcode -gt 1 ]]; then
+				echo "error: option '$1' is not a valid option"
+				exit $__exitcode
+			else
+#				echo "hyphen-stripped param is: '${1//-/}' and __arr[${1//-/}] is '${__arr[${1//-/}]}'"
+				if [[ $__exitcode -eq 0 ]]; then
+					local __ctr=0
+					local __i
+					for __i in "${@:2}"; do
+						if [[ ${__i:0:1} == "-" ]]; then
+							break
+						else
+#							echo "appending: '${__arr[${1//-/}]}'$__i' ' to __arr[${1//-/}]"
+							__arr[${1//-/}]="${__arr[${1//-/}]}'$__i' "
+							(( __ctr++ ))
+#							echo "__[${1//-/}] is now '${__arr[${1//-/}]}'"
+						fi
+					done
+					if [[ $__ctr -eq 0 ]]; then
+						echo "error: option '$1' requires an argument"
+						exit 2
+					else
+#						echo "__ctr is '$__ctr'"
+						shift $__ctr
+					fi
+				else
+					 __arr[${1//-/}]=""
+				fi
+				shift	
+			fi
+		fi
+	done
+}
+
+declare -A associative_array # must be declared BEFORE function call
+
+args2array associative_array "$@"
+
+for key in "${!associative_array[@]}"; do
+	printf "%s=%s\n" "$key" "'${associative_array[$key]% }'"
