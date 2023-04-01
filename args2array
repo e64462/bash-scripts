@@ -1,12 +1,15 @@
 #!/bin/bash
 
-SMOL_OPTS="a:bc"
-LONG_OPTS="alpha,beta:,gamma"
-
 validate_option() {
-	# Function returns 0 if option is valid and requires arguments
-	# Function returns 1 if option is valid and does not require an argument
-	# Function returns 2 if option is invalid
+	# returns 0 if option is valid and requires arguments
+	# returns 1 if option is valid and does not require an argument
+	# returns 2 if option is invalid
+
+	# UPDATE SHOULD -
+	# return 0 if option is valid and requires 1 or more arguments
+	# return 1 if option is valid and requires exactly 1 argument
+	# return 2 if option is valid and requires 0 arguments
+	# return 3 if option is invalid
 
 	local opt="$1"		# option to search for
 	local lgth=${#opt}
@@ -20,10 +23,13 @@ validate_option() {
 		if [[ $goffset -lt ${#optstr} ]]; then
 			# a match was found
 			if [[ "${optstr:$(( goffset + lgth )):1}" == ":" ]]; then
-				# the option requires an argument
+				# the option requires 1 or more arguments
 				return 0
-			else
+			elif [[ "${optstr:$(( goffset + lgth )):1}" == "!" ]]; then
+				# the option requires exactly 1 argument
 				return 1
+			else
+				return 2
 			fi
 		fi
 	else # opt is long
@@ -35,7 +41,7 @@ validate_option() {
 		[[ "$firstchar" != "," ]] && optstr=",$optstr" && ((offsetadjust++))
 		[[ "$lastchar" != "," ]] && optstr="${optstr},"
 	
-		local fullstring_matches=(",${opt}," ",${opt}:,")
+		local fullstring_matches=(",${opt}," ",${opt}:," ",${opt}!,")
 		
 		local match
 		for match in "${fullstring_matches[@]}"	; do
@@ -47,47 +53,57 @@ validate_option() {
 				((goffset++))
 				[[ "$firstchar" != "," ]] && ((goffset--))
 				if [[ "${match: -2:1}" == ":" ]]; then
-					# the option requires an argument
+					# the option requires one or more arguments
 					return 0
+				elif [[ "${match: -2:1}" == "!" ]]; then
+					# the option requires exactly one argument
+					return 1
 				else
 					# the option does not require any arguments
-					return 1
+					return 2
 				fi
 			else
 				goffset=$(( ${#optstr} - offsetadjust ))			
 			fi
 		done
 	fi
-	return 2
+	return 3
 }
 
 args2array() {
 	declare -n __arr=$1 && shift
 	
-	local __exitcode __ctr=0 __i __exitcode
+	local __exitcode __ctr=0 __i __exitcode __opt
 
 	while (( $# > 0 )); do	
 #		echo "first positional is '$1'"
 		if [[ ${1:0:1} == "-" ]]; then
+			__opt=${1//-/}
 			# we're working with an option
-#			echo "searching optstrings for '${1//-/}'"
-			validate_option "${1//-/}"
+#			echo "searching optstrings for '${__opt}'"
+			validate_option "${__opt}"
 			__exitcode=$?
-			if [[ $__exitcode -gt 1 ]]; then
+			if [[ $__exitcode -gt 2 ]]; then
 				echo "error: option '$1' is not a valid option"
 				exit $__exitcode
 			else
-#				echo "hyphen-stripped param is: '${1//-/}' and __arr[${1//-/}] is '${__arr[${1//-/}]}'"
+#				echo "hyphen-stripped param is: '${__opt}' and __arr[${__opt}] is '${__arr[${__opt}]}'"
 				if [[ $__exitcode -eq 0 ]]; then
 					__ctr=0
 					for __i in "${@:2}"; do
 						if [[ ${__i:0:1} == "-" ]]; then
 							break
 						else
-#							echo "appending: '${__arr[${1//-/}]}'$__i' ' to __arr[${1//-/}]"
-							__arr[${1//-/}]="${__arr[${1//-/}]}'$__i' "
+							if [[ ! ${__arr[${__opt}]+isset} ]]; then
+								__arr[${__opt}]="${__i}"
+							else
+								__arr[${__opt}]="${__arr[${__opt}]};${__i}"
+							fi
+							# printf '%q\n' "${__arr[${__opt}]}"
+#							echo "appending: '${__arr[${__opt}]}'$__i' ' to __arr[${__opt}]"
+							# __arr[${__opt}]="${__arr[${__opt}]}'$__i' " # this formatting requires eval - bad
 							(( __ctr++ ))
-#							echo "__[${1//-/}] is now '${__arr[${1//-/}]}'"
+#							echo "__arr[${__opt}] is now '${__arr[${__opt}]}'"
 						fi
 					done
 					if [[ $__ctr -eq 0 ]]; then
@@ -97,23 +113,52 @@ args2array() {
 #						echo "__ctr is '$__ctr'"
 						shift $__ctr
 					fi
+				elif [[ $__exitcode -eq 1 ]]; then
+					if [[ ! ${__arr[${__opt}]+isset} && -n "$2" && ${2:0:1} != "-" ]]; then
+						if  [[ -z "$3" || "${3:0:1}" == "-" ]]; then
+							 __arr[$__opt]="$2"
+	                        shift
+						else
+							echo "error: option '$1' takes exactly one argument"
+							exit 5
+						fi
+					else
+						echo "error: option '$1' takes exactly one argument"
+						exit 5
+					fi
 				else
-					 __arr[${1//-/}]=""
+					 __arr[${__opt}]=""
 				fi
 				shift	
 			fi
+		else
+			shift # ignore every option not starting with -
 		fi
 	done
+	# printf '%q\n' "${__arr[a]}"
 }
 
-declare -A associative_array # must be declared BEFORE function call
+unpack_args() {
+	declare -n _a=$1	# xD
+	local _pld=$2
+	local IFS=';'
+	_a=($_pld)
+}
 
-args2array associative_array "$@"
+# UNCOMMENT these lines and run the examples below for usage
+# ---------------------------------------------------------------------
+
+# SMOL_OPTS="a:b!c"    # NOT comma separated, : denotes mandatory argument
+# LONG_OPTS="alpha!,beta:,gamma" # comma separated, : denotes mandatory argument
+
+# declare -A associative_array # must be declared BEFORE function call
+
+# args2array associative_array "$@"
 
 # Print the key=value pairs
-for key in "${!associative_array[@]}"; do
-	printf "%s=%s\n" "$key" "'${associative_array[$key]% }'"
-done
+# for key in "${!associative_array[@]}"; do
+#	printf "%s=%s\n" "$key" "'${associative_array[$key]% }'"
+# done
 
 # -----------------------------------------------------------------------
 # EXAMPLE-1 USAGE 

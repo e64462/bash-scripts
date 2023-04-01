@@ -1,5 +1,7 @@
 #!/usr/bin/bash
 
+source args2array
+
 CONFIGURATION_FILE='/etc/backUP.conf'
 MIN_BASH_VER='4.0'
 MIN_BORG_VER='1.2.3'
@@ -8,10 +10,9 @@ DATE="$(date +%m-%d-%Y-%I:%M:%S-%p)"
 FILENAME="$(basename $0)"
 IS_NUM_REGEX='^[1-9][0-9]*$'
 REPO_STR='This is a Borg Backup repository.'
-GETOPT_SHORT='a:e:r:hblcs'
-GETOPT_LONG='dest:,repo:,pass,dupe:,conf:'
+SMOL_OPTS='a:e!r:hblcs'
+LONG_OPTS='dest!,repo!,pass,dupe:,conf!'
 declare -a dupe_paths
-
 
 usage(){
 >&2 cat << EOF
@@ -70,16 +71,14 @@ parse_config() {
 	)
 
 	while read line; do
-		# skip processing lines that begin with '#' or contain multiple '='
+		# skip processing lines that begin with '#'
 		if [[ "$line" =~ ^#.*$ ]]; then 
 			continue
 		fi
 		
-
 		if echo "$line" | grep -F = &>/dev/null; then
 			grab_key "$line" varname
 			grab_value "$line" value
-
 			# echo -e "\nvarname has value '$varname' and value is '$value'\n" 
 			case "$varname" in
 				DUPLICATE_REPO_PATH )
@@ -140,14 +139,17 @@ remove_from_backup_list() {
 			# function received a number less than or equal to the number of borg backups
 			db_entry=$(sed -n "$argument{p;q}" $BACKUP_DB)
 			db_entry_line_num=$argument
-		elif grep -Fxq "$argument" $BACKUP_DB; then
-			# function received an entry tracked by the database
-			db_entry=$argument
-			db_entry_line_num=$(grep -nFx "$argument" $BACKUP_DB | cut -f1 -d:)
 		else
-			# function does not recognize the argument received
-			echo -e "\nERROR: No match to '$argument' found in '$BACKUP_DB'\n"
-			exit 1
+			file=$(readlink -e "$argument")
+		   	if grep -Fxq "$file" $BACKUP_DB; then
+			# function received an entry tracked by the database
+				db_entry=$file
+				db_entry_line_num=$(grep -nFx "$file" $BACKUP_DB | cut -f1 -d:)
+			else
+				# function does not recognize the argument received
+				echo -e "\nERROR: No match to '$argument' found in '$BACKUP_DB'\n"
+				exit 1
+			fi
 		fi
 		lines_passed["$db_entry_line_num"]="$db_entry"
 	done
@@ -321,7 +323,7 @@ validate_duplicate() {
 		# argument is not a valid directory
 		echo -e "\nWARN: Duplication path '$duplicate_repo_path' is not a valid directory and will be skipped.\n"
 		return 1
-	elif awk '$1 !~ /^#/ && $2 ~ /^[/]/ {print $2}' /etc/fstab | grep -Fxq $duplicate_repo_path; then
+	elif awk '$1 !~ /^#/ && $2 ~ /^[/]/ {print $2}' /etc/fstab | grep -Fxq "$duplicate_repo_path"; then
 		# mountpoint command provided by util-linux - checks if duplicate_repo_path is mounted
 		if ! mountpoint -q "$duplicate_repo_path"; then
 			echo -e "\nWARN: '$duplicate_repo_path' isn't mounted and will be skipped.\n"
@@ -367,9 +369,6 @@ if [[ $? -ne 0 ]]; then
 	exit 1
 fi
 
-getopt --test 
-[[ $? -ne 4 ]] && echo -e "\nERROR: $FILENAME depends on enhanced getopt. Please install before continuing\n" && exit 4
-
 borg -V > /dev/null 2>&1
 	borg_install_check=$?
 { printf '%s\n%s' "$MIN_BORG_VER" "$(borg -V | awk '{print $NF}')" | sort -C -V; } > /dev/null 2>&1
@@ -381,75 +380,51 @@ if [[ $borg_install_check -ne 0 || $borg_version_check -ne 0 ]]; then
 	exit 1
 fi
 
-args=$(getopt -n "$FILENAME" -a -o "$GETOPT_SHORT" --long "$GETOPT_LONG" -- "$@")
-eval set -- ${args}
 typeset -A ARGS
-while true; do
-	if [[ "${1:0:2}" != "--" ]]; then
-		ARGS["${1:1:1}"]=true
-	else
-		if [[ ${#1} -gt 2 ]]; then
-			ARGS["${1:2}"]=true
-		fi
-	fi
-	
-	case "$1" in
-		-b | -c | -l | -h | --pass | -s )
-			shift	;;
-		-a )
-			ADD_ARGS+=("$2")
-			shift 2	;;
-		--dest )
-			DIR_POSITIONAL_ARG="$2"
-			shift 2	;;
-		--repo )
-			REPO_ARG="$2"
-			shift 2 ;;
-		--dupe )
-			tval="$(realpath -mq "$2")"
-			validate_duplicate "$tval" && dupe_paths+=("$tval")
-			shift 2	;;
-		--conf )
-			CONF_ARG="$(realpath -mq "$2")"
-			shift 2 ;;
-		-e )
-			EXTC_ARG="${2:=missing}"
-			shift 2	;;
-		-r )
-			REM_ARGS+=("${2%/}")
-			shift 2 ;;
-		# -- means the end of the arguments; drop this, and break out of the while loop
-		-- )
-			shift; break ;;
-		* ) >&2 echo Unsupported option: $1
-			usage ;;
+args2array ARGS "$@"
+
+for arg in "${!ARGS[@]}"; do
+	case "$arg" in
+		a ) unpack_args ADD_ARGS "${ARGS[a]}"
+			;;
+		repo )
+			REPO_ARG="$(readlink -e "${ARGS[repo]}")"
+			;;
+		dupe ) unpack_args dupes "${ARGS[dupe]}"
+			for i in "${dupes[@]}"; do
+				tval="$(realpath -mq "$i")"
+				validate_duplicate "$tval" && dupe_paths+=("$tval")
+			done
+			;;
+		conf )
+			CONF_ARG="$(realpath -mq "${ARGS[conf]}")"
+			;;
+		r ) unpack_args REM_ARGS "${ARGS[r]}"
+			;;
 	esac
 done
 
-if [[ ${ARGS[h]} || ${#ARGS[*]} -eq 0 ]]; then
+if [[ -v ARGS[h] || ${#ARGS[*]} -eq 0 ]]; then
 	usage
 	exit 0
 elif [[ $EUID -ne 0 ]]; then
 	echo -e "\n$FILENAME requires sudo privileges.\n"
 	exit 1
 else
-	if [[ -n ${ARGS[conf]} ]]; then
-		CONFIGURATION_FILE="$CONF_ARG"
-	fi
+	[[ -v $ARGS[conf] ]] && CONFIGURATION_FILE="$CONF_ARG"
 	
 	parse_config
 
-	[[ -n ${ARGS[repo]} ]] && REPO_ARG="$(readlink -e "$REPO_ARG")" && \
-							validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
-	[[ -n ${ARGS[pass]} ]] && get_password
-	[[ -n ${ARGS[dest]} ]] && export EXTRACT_TO="$DIR_POSITIONAL_ARG"
-	[[ -n ${ARGS[r]} ]] && remove_from_backup_list "${REM_ARGS[@]}"
-	[[ -n ${ARGS[a]} ]] && append_to_backup_list "${ADD_ARGS[@]}"
-	[[ -n ${ARGS[b]} ]] && create_borg_backup
-	[[ -n ${ARGS[c]} ]] && borg_compact_and_prune
-	[[ -n ${ARGS[e]} ]] && restore_borg_backup "$EXTC_ARG"
-	[[ -n ${ARGS[l]} ]] && list_borg_backups
-	[[ -n ${ARGS[s]} ]] && print_database
+	[[ -v ARGS[repo] ]] && validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
+	[[ -v ARGS[pass] ]] && get_password
+	[[ -v ARGS[dest] ]] && export EXTRACT_TO="${ARGS[dest]}"
+	[[ -v ARGS[r] ]] && remove_from_backup_list "${REM_ARGS[@]}"
+	[[ -v ARGS[a] ]] && append_to_backup_list "${ADD_ARGS[@]}"
+	[[ -v ARGS[b] ]] && create_borg_backup
+	[[ -v ARGS[c] ]] && borg_compact_and_prune
+	[[ -v ARGS[e] ]] && restore_borg_backup "${ARGS[e]}"
+	[[ -v ARGS[l] ]] && list_borg_backups
+	[[ -v ARGS[s] ]] && print_database
 
 	duplicate_borg_repo
 fi
