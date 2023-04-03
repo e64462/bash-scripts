@@ -107,9 +107,9 @@ args2array() {
 					fi
 				elif [[ $__exitcode -eq 1 ]]; then
 					if [[ ! ${__arr[$__opt]+isset} && -n "$2" && ${2:0:1} != "-" ]]; then
-						if  [[ -z "$3" || "${3:0:1}" == "-" ]]; then
+						if	[[ -z "$3" || "${3:0:1}" == "-" ]]; then
 							 __arr[$__opt]="$2"
-	                        __ctr=1
+							__ctr=1
 						else
 							echo "error: option '$1' takes exactly one argument"
 							exit 5
@@ -120,7 +120,7 @@ args2array() {
 					fi
 				else
 					if [[ -n "$2" && ${2:0:1} != "-" ]]; then
-						echo "error: option '$1' does not take  any argument"
+						echo "error: option '$1' does not take	any argument"
 						exit 5
 					else
 						__arr[$__opt]=""

@@ -136,7 +136,7 @@ remove_from_backup_list() {
 			db_entry_line_num=$argument
 		else
 			file=$(readlink -e "$argument")
-		   	if grep -Fxq "$file" $BACKUP_DB; then
+			if grep -Fxq "$file" $BACKUP_DB; then
 			# function received an entry tracked by the database
 				db_entry=$file
 				db_entry_line_num=$(grep -nFx "$file" $BACKUP_DB | cut -f1 -d:)
@@ -246,22 +246,22 @@ search() {
 		borg list  --short "${BORG_REPO}::$a" 2>/dev/null | grep "$1"
 		echo
 	done | awk 'BEGIN { empty = 0 } {
-	        if ($0 == "") {
-	            if (NR - empty == 3) {
-	                start = 0
-	            } else {
-	                print data
-	            }
-	            empty = NR
-	            data = ""
-	        } else {
-	            if (start == 0) {
-	                start = NR
-	            }
-	            data = data "\n" $0
-	        }
-	    }
-	    END { print data }'
+			if ($0 == "") {
+				if (NR - empty == 3) {
+					start = 0
+				} else {
+					print data
+				}
+				empty = NR
+				data = ""
+			} else {
+				if (start == 0) {
+					start = NR
+				}
+				data = data "\n" $0
+			}
+		}
+		END { print data }'
 }
 
 borg_compact_and_prune() {
