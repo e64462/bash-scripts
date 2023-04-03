@@ -10,7 +10,7 @@ DATE="$(date +%m-%d-%Y-%I:%M:%S-%p)"
 FILENAME="$(basename $0)"
 IS_NUM_REGEX='^[1-9][0-9]*$'
 REPO_STR='This is a Borg Backup repository.'
-SMOL_OPTS='a:e!r:hblcs'
+SMOL_OPTS='a:e!r:hblLcs!'
 LONG_OPTS='dest!,repo!,pass,dupe:,conf!'
 declare -a dupe_paths
 
@@ -26,7 +26,7 @@ This program is used to manage the backup 'database' defined in '$CONFIGURATION_
 It is probably inefficient, buggy, and prone to explode or worse.
 
 Usage: 
- $FILENAME [option] <file>
+ $FILENAME option [<path>]
  
 Options:
      -a <path> : Add <path> to the 'database'
@@ -37,17 +37,12 @@ Options:
      -e        : Extract a BORG backup ( Defaults to ~/temp )
  --dest <path> : Set extraction directory ( Only applies to -e flag )
      -l        : List all BORG backups
+     -L        : List all paths monitored by $FILENAME
      -h        : Display usage information
      -r <path> : Remove <path> from the 'database'
-     -s        : Show all paths monitored by $FILENAME
+     -s <name> : Search archives for <name>
  --pass        : Prompts for the BORG Backup passphrase
  --repo <path> : Sets the BORG repo to <path>
-
-Caveats:
- 1) A new -a or -r flag must preceed each path given, something like:
-	  $FILENAME -a <path-1> -a <path-2> 
-
- 2) White space in <path> must be escaped or quoted for processing
 
 Configuration options are loaded from '$CONFIGURATION_FILE'
 
@@ -244,6 +239,31 @@ restore_borg_backup() {
 	cd "$workingdir"
 }
 
+search() {
+	local a
+	borg list --short "$BORG_REPO" 2>/dev/null | while read -r a; do
+		echo -e "${a}\n-----------------------"
+		borg list  --short "${BORG_REPO}::$a" 2>/dev/null | grep "$1"
+		echo
+	done | awk 'BEGIN { empty = 0 } {
+	        if ($0 == "") {
+	            if (NR - empty == 3) {
+	                start = 0
+	            } else {
+	                print data
+	            }
+	            empty = NR
+	            data = ""
+	        } else {
+	            if (start == 0) {
+	                start = NR
+	            }
+	            data = data "\n" $0
+	        }
+	    }
+	    END { print data }'
+}
+
 borg_compact_and_prune() {
 	borg prune --list --keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO" 2>/dev/null	
 	borg compact "$BORG_REPO" 2>/dev/null
@@ -315,7 +335,7 @@ validate_repo() {
 
 validate_duplicate() {
 	# Duplication is performed with rsync --delete so anything in the destination will be wiped
-	# This script runs script runs as root and we don't want to erase all of /!
+	# This script runs as root and we don't want to accidentally erase any important directories!
 
 	local duplicate_repo_path="$1"
 
@@ -423,8 +443,9 @@ else
 	[[ -v ARGS[b] ]] && create_borg_backup
 	[[ -v ARGS[c] ]] && borg_compact_and_prune
 	[[ -v ARGS[e] ]] && restore_borg_backup "${ARGS[e]}"
+	[[ -v ARGS[s] ]] && search "${ARGS[s]}"
 	[[ -v ARGS[l] ]] && list_borg_backups
-	[[ -v ARGS[s] ]] && print_database
+	[[ -v ARGS[L] ]] && print_database
 
 	duplicate_borg_repo
 fi
