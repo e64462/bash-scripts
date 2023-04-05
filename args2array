@@ -61,6 +61,33 @@ validate_option() {
 	return 3
 }
 
+expand_options() {
+	declare -n _opts=$1
+	
+	local cmpd="$2"
+	cmpd="${cmpd//-/}"
+	_opts=()
+	local i _ctr=0
+
+	for (( i = 0; i < ${#cmpd}; i++ )); do
+		validate_option "${cmpd:$i:1}"
+		case "$?" in
+			0 | 1 ) _opts+=("-${cmpd:$i:1}")
+					(( _ctr++ ))
+					;;
+			2 ) _opts=("-${cmpd:$i:1}" "${_opts[@]}")
+				;;
+			3 ) echo "error: option '-${cmpd:$i:1}' is invalid."
+				exit 3
+				;;
+		esac
+		if [[ $_ctr -gt 1 ]]; then
+			echo "error: Two or more options '-${cmpd}' require an argument."
+			exit 5
+		fi
+	done
+}
+
 args2array() {
 	declare -n __arr=$1 && shift
 	
@@ -70,6 +97,13 @@ args2array() {
 #		echo "first positional is '$1'"
 		if [[ ${1:0:1} == "-" ]]; then
 			# we're working with an option
+			if  [[ ! "${1:1:1}" == "-" && ${#1} > 2 ]]; then
+			# interpret parameter as concatenated
+				expand_options __temp "${1//-/}"
+				shift
+				set -- "${__temp[@]}" "$@"
+				continue
+			fi
 			__opt=${1//-/}
 			if [[ ${#__opt} -gt 1 ]]; then
 				__opt=${1#'--'}
@@ -96,7 +130,6 @@ args2array() {
 								__arr[$__opt]="${__arr[$__opt]};${__i}"
 							fi
 #							echo "appending: '${__arr[$__opt]}'$__i' ' to __arr[$__opt]"
-							# __arr[$__opt]="${__arr[$__opt]}'$__i' " # this formatting requires eval - bad
 							(( __ctr++ ))
 #							echo "__arr[$__opt] is now '${__arr[$__opt]}'"
 						fi
@@ -106,21 +139,28 @@ args2array() {
 						exit 1
 					fi
 				elif [[ $__exitcode -eq 1 ]]; then
+					# option requires exactly one argument
 					if [[ ! ${__arr[$__opt]+isset} && -n "$2" && ${2:0:1} != "-" ]]; then
+						# at least one parameter was passed
 						if	[[ -z "$3" || "${3:0:1}" == "-" ]]; then
+							# at most one parameter was passed
 							 __arr[$__opt]="$2"
 							__ctr=1
 						else
+							# too many arguments passed, no bueno
 							echo "error: option '$1' takes exactly one argument"
 							exit 5
 						fi
 					else
+						# not enough arguments passed, no bueno
 						echo "error: option '$1' takes exactly one argument"
 						exit 5
 					fi
 				else
+					# option does not accept any arguments
 					if [[ -n "$2" && ${2:0:1} != "-" ]]; then
-						echo "error: option '$1' does not take	any argument"
+						# too many arguments passed to the option
+						echo "error: option '$1' does not take any argument"
 						exit 5
 					else
 						__arr[$__opt]=""
