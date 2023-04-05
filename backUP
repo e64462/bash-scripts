@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 
-source args2array
+source /usr/local/bin/args2array; dependchck=$?
 
 CONFIGURATION_FILE='/etc/backUP.conf'
 MIN_BASH_VER='4.0'
@@ -193,7 +193,7 @@ list_borg_backups() {
 	printf "\n%-8s%s\n" "#" "ARCHIVE NAME"
 	printf "%s%s\n" "------  ------------"
 	counter=0
-	borg list "$BORG_REPO"	| \
+	borg list "$BORG_REPO"	2>/dev/null | \
 		while read line; do
 			((counter+=1))
 			archive_name=$(echo $line | awk '{print $1}')
@@ -242,7 +242,7 @@ restore_borg_backup() {
 search() {
 	local a
 	borg list --short "$BORG_REPO" 2>/dev/null | while read -r a; do
-		echo -e "${a}\n-----------------------"
+		printf "%s\n%s\n" "${a}" "-----------------------"
 		borg list  --short "${BORG_REPO}::$a" 2>/dev/null | grep "$1"
 		echo
 	done | awk 'BEGIN { empty = 0 } {
@@ -380,6 +380,11 @@ grab_value() {
 	gv_vref="${gv_vref#"${gv_vref%%[![:space:]\"]*}"}" # remove first " and any white space between it and the next character
 	gv_vref="${gv_vref%"${gv_vref##*[![:space:]\"]}"}" 
 }
+
+if [[ $dependchck -ne 0 ]]; then
+	printf '\n%s\n' "ERROR: $FILENAME depends on args2array."
+	exit 1
+fi
 
 { printf '%s\n%s' "$MIN_BASH_VER" "$BASH_VERSION" | sort -C -V; } > /dev/null 2>&1	
 if [[ $? -ne 0 ]]; then
