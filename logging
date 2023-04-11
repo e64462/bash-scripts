@@ -1,0 +1,105 @@
+#!/bin/bash
+
+[[ ${__LOGS_LOADED__} -eq 1 ]] && return 0
+export __LOGS_LOADED__=1
+
+__JOB__="$(basename "$0" '.sh')"
+__MSGPATH__="/var/run/${__JOB__}/$$"
+
+_black_='\033[0;30m'
+_red_='\033[0;31m'
+_green_='\033[0;32m'
+_yellow_='\033[0;33m'
+_purple_='\033[0;35m'
+_white_='\033[0;97m'
+_cyan_='\033[0;36m'
+_lgreen_='\033[0;92m'
+_reset_='\033[0m'
+
+function ecrit()   { __verb__=1 elog "_purple_" "FATAL" "$*" ;}
+function eerror()  { __verb__=2 elog "_red_"    "ERROR" "$*" ;}
+function ewarn()   { __verb__=2 elog "_yellow_" "WARN"  "$*" ;}
+function einfo()   { __verb__=2 elog "_white_"  "INFO"  "$*" ;}
+function edebug()  { __verb__=3 elog "_green_"  "DEBUG" "$*" ;}
+function etrace()  { __verb__=4 elog "_cyan_"   "TRACE" "$*" ;}
+
+## esilent prints output even in silent mode
+function eprint() { __verb__=0 elog "_lgreen_" "*" "$*" ;}
+function edumpvar() { local -a a=(); for var in "$@"; do a+=("$var = '${!var}'  "); done; etrace "${FUNCNAME[1]} :::: ${a[*]}"; }
+
+function elog() {
+	if [[ ${verbosity:-2} -ge ${__verb__} ]]; then
+		if [[ -n ${__LOG_OPEN__} ]]; then
+			printf "%(%Y-%m-%d %H:%M:%S)T  ${!1}%5s${_reset_}  %s\n" -1 "$2" "$3" >>"${__LOG__}"
+		fi
+		printf "${!1}%5s${_reset_}  %s\n" "$2" "$3" >&${__STOUTFD__}
+	fi
+}
+
+function dlog() {
+	if [[ -n ${__LOG_OPEN__} ]]; then
+		printf "%(%Y-%m-%d %H:%M:%S)T  ${!1}%-7s${_reset_}%b\n" -1 "$2" "$3" >>"${__LOG__}"
+	else
+		edebug "Failed to write '$3' to file because the Log File is Closed."
+	fi
+}
+
+function __init_messages__() {
+	exec {__STOUTFD__}>&1
+    exec {__STERRFD__}>&2
+	while :; do
+		while getopts ':v:' opt; do
+	        if [[ ${opt} == 'v' && ${OPTARG} =~ ^[0-4]$ ]]; then
+    	        export verbosity=${OPTARG}
+        	    break 2
+	        fi
+	    done
+		(( OPTIND++ ))
+		[[ $OPTIND -gt $# ]] && break
+	done
+	trap __end_messages__ EXIT
+}
+
+function __open_logfile__() {
+	edumpvar __LOG_OPEN__ __LOGPATH__
+	if [[ -z ${__LOG_OPEN__} ]]; then
+		if [[ -d ${__LOGPATH__} ]]; then
+			__LOG__="${__LOGPATH__}/LOG_${__JOB__}.txt"
+			exec {__LOGFD__}<>"${__LOG__}"
+			exec {__STOUTFD__}>&1
+			exec {__STERRFD__}>&2
+			__LOG_OPEN__=1
+			[[ -n ${__LOG_STOUT__} ]] && exec 1>&${__LOGFD__} 
+			[[ -n ${__LOG_STERR__} ]] && exec 2>&${__LOGFD__}
+			trap __end_messages__ EXIT
+			dlog "_white_" "LOGS" "SESSION OPENED"
+			edebug "Logging to '${__LOG__}'"
+			edumpvar __LOG_OPEN__ __LOGPATH__ __LOG__
+		else
+			ecrit "__LOGPATH__ is not a directory. Logging disabled."
+			return 1
+		fi
+	else
+		ecrit "__LOGPATH__ is unset. Logging disabled."
+		return 1
+	fi
+}
+
+function __end_messages__() {
+	[[ -n "${__LOG_OPEN__}" ]] && dlog "_white_" "LOGS" "SESSION CLOSING\n" && unset __LOG_OPEN__
+	[[ -v __LOGFD__ ]] && exec {__LOGFD__}>&-
+	exec 1>&${__STOUTFD__}-
+	exec 2>&${__STERRFD__}-
+	trap - EXIT
+}
+
+# relevant information... i think?
+
+# https://unix.stackexchange.com/questions/522877/how-to-cat-named-pipe-without-waiting/522881#522881 # see GNU dd's remark for info
+# https://technotes.adelerhof.eu/bash/logging/ # rough template of this library
+# https://stackoverflow.com/questions/6834347/named-pipe-closing-prematurely-in-script
+# https://stackoverflow.com/questions/5376489/how-do-i-use-exec-3myfifo-in-a-script-and-not-have-echo-foo3-close-the-pipe
+# https://stackoverflow.com/questions/2776994/tee-a-pipe-asynchronously
+# https://catonmat.net/bash-one-liners-explained-part-three - SEE ITEM 13??
+# https://github.com/miguelmota/bash-streams-handbook#send-commands-to-terminal-through-a-named-pipe
+# https://github.com/codeforester/base/blob/master/lib/stdlib.sh

@@ -1,6 +1,7 @@
 #!/usr/bin/bash
 
-source /usr/local/bin/args2array; dependchck=$?
+source /usr/local/bin/logging
+source /usr/local/bin/args2array
 
 CONFIGURATION_FILE='/etc/backUP.conf'
 MIN_BASH_VER='4.0'
@@ -10,7 +11,7 @@ DATE="$(date +%m-%d-%Y-%I:%M:%S-%p)"
 FILENAME="$(basename $0)"
 IS_NUM_REGEX='^[1-9][0-9]*$'
 REPO_STR='This is a Borg Backup repository.'
-SMOL_OPTS='a:e!r:hblLcs!'
+SMOL_OPTS='a:e!r:hblLcs!v!'
 LONG_OPTS='dest!,repo!,pass,dupe:,conf!'
 declare -a dupe_paths
 
@@ -74,7 +75,7 @@ parse_config() {
 		if echo "$line" | grep -F = &>/dev/null; then
 			grab_key "$line" varname
 			grab_value "$line" value
-			# echo -e "\nvarname has value '$varname' and value is '$value'\n" 
+			edumpvar varname value
 			case "$varname" in
 				DUPLICATE_REPO_PATH )
 					tval="$(realpath -mq "$value")"
@@ -95,6 +96,7 @@ parse_config() {
 	export BORG_REPO="${config[BORG_REPO]}"
 	export BACKUP_DB="${config[BACKUP_DB]}"
 	export SOME_USER="${config[SOME_USER]}"
+	export __LOGPATH__="${config[LOGPATH]}"
 	if [[ -z "${config[EXTRACT_TO]}" ]]; then
 		export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
 	else
@@ -105,22 +107,20 @@ parse_config() {
 append_to_backup_list() {
 	for argument in "$@"; do 
 		if [[ ! -f "$argument" && ! -d "$argument" ]]; then
-			echo -e "\nERROR: Path '$argument' doesn't seem to exist. Exiting.\n"
+			ecrit "Path '$argument' doesn't seem to exist. Exiting."
 			exit 1
 		fi
 	done
-	echo -en "\n"
 	for argument in "$@"; do
 		# normalize the input
 		file=$(readlink -e "$argument")
 		if ! grep -Fxq "$file" $BACKUP_DB; then
-			echo "Appending '$file' to '$BACKUP_DB'"
+			eprint "Appending '$file' to '$BACKUP_DB'"
 			echo "$file" >> $BACKUP_DB
 		else
-			echo -e "\nWARN: Path '$file' already exists in '$BACKUP_DB'\n"
+			ewarn "Entry for '$file' already exists in '$BACKUP_DB'"
 		fi
 	done
-	echo -en "\n"
 	sort -o "$BACKUP_DB" "$BACKUP_DB"
 }
 
@@ -142,7 +142,7 @@ remove_from_backup_list() {
 				db_entry_line_num=$(grep -nFx "$file" $BACKUP_DB | cut -f1 -d:)
 			else
 				# function does not recognize the argument received
-				echo -e "\nERROR: No match to '$argument' found in '$BACKUP_DB'\n"
+				ecrit  "No match to '$file' found in '$BACKUP_DB'"
 				exit 1
 			fi
 		fi
@@ -150,12 +150,10 @@ remove_from_backup_list() {
 	done
 	
 	sed_string=""
-	echo -en "\n"
 	for key in "${!lines_passed[@]}"; do
-		echo "Removing '${lines_passed[$key]}' from '$BACKUP_DB'"
+		eprint "Removing '${lines_passed[$key]}' from '$BACKUP_DB'"
 		sed_string+="${key}d;"
 	done
-	echo -en "\n"
 	
 	sed -i "${sed_string%;}" $BACKUP_DB
 }
@@ -183,7 +181,7 @@ recurse_directories() {
 }
 
 create_borg_backup() {
-	echo -e "\nCreating new backup '$DATE' in '$BORG_REPO'\n"
+	eprint "Creating new backup '$DATE' in '$BORG_REPO'"
 
 	{ parse_parents && recurse_directories; } | sort -u | \
 		borg create --paths-from-stdin "$BORG_REPO::$DATE" 2>/dev/null
@@ -212,11 +210,6 @@ restore_borg_backup() {
 	# Don't change permissions of /
 	if [[ ! -d "$EXTRACT_TO" ]]; then
 		install -d -m 0755 -o "$SOME_USER" -g "$SOME_USER" "$EXTRACT_TO"
-		if [[ $? -ne 0 ]]; then 
-			# This will probably never be displayed because the function requires root priv.
-			echo -e "\nERROR: A problem occurred during extraction."
-			echo -e "Try '$FILENAME --dest /path' or check '$EXTRACT_TO'\n"
-		fi
 	fi
 
 	if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_archives ]]; then
@@ -226,42 +219,44 @@ restore_borg_backup() {
 		borg_archive=$1
 	fi
 
-	echo -e "\nExtracting '$borg_archive' to '$EXTRACT_TO'.\n"
+	eprint "Extracting '$borg_archive' to '$EXTRACT_TO'."
 	workingdir=$(pwd)
 	cd "$EXTRACT_TO"
-	borg extract $BORG_REPO::$borg_archive 2>/dev/null
+	borg extract "$BORG_REPO::$borg_archive" 2>/dev/null
 	if [[ $? -ne 0 ]]; then
-		echo -e "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
-		echo -e "Use '$FILENAME -l' to display a list of all valid archives.\n"
+		eerror "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
+		eerror "Use '$FILENAME -l' to display a list of all valid archives."
 	else
-		echo -e "Success! Files extracted to $EXTRACT_TO.\n"
+		eprint "Success! Files extracted to $EXTRACT_TO."
 	fi
 	cd "$workingdir"
 }
 
 search() {
 	local a
-	borg list --short "$BORG_REPO" 2>/dev/null | while read -r a; do
-		printf "%s\n%s\n" "${a}" "-----------------------"
-		borg list  --short "${BORG_REPO}::$a" 2>/dev/null | grep "$1"
-		echo
-	done | awk 'BEGIN { empty = 0 } {
-			if ($0 == "") {
-				if (NR - empty == 3) {
-					start = 0
-				} else {
-					print data
-				}
-				empty = NR
-				data = ""
-			} else {
-				if (start == 0) {
-					start = NR
-				}
-				data = data "\n" $0
-			}
-		}
-		END { print data }'
+	borg list --short "$BORG_REPO" 2>/dev/null | \
+		while read -r a; do
+			printf "%s\n%s\n" "${a}" "----------------------"
+			borg list --short "${BORG_REPO}::$a" 2>/dev/null | grep "$1"
+			echo
+		done   | \
+			awk 'BEGIN { empty = 0 } {
+		 	if ($0 == "") {
+		 		if (NR - empty == 3) {
+		 			start = 0
+		 		} else {
+		 			print data
+		 		}
+		 		empty = NR
+		 		data = ""
+		 	} else {
+		 		if (start == 0) {
+		 			start = NR
+		 		}
+		 		data = data "\n" $0
+		 	}
+		 }
+		 END { print data }'
 }
 
 borg_compact_and_prune() {
@@ -277,7 +272,7 @@ duplicate_borg_repo() {
 			rsync -au --delete "$primary_repo" "$secondary_repo"  > /dev/null
 		done
 	else
-		echo -e "\nWARN: No duplication paths specified. '$primary_repo' will not be duplicated\n"
+		ewarn "No duplication paths specified. '$primary_repo' will not be duplicated"
 	fi
 }
 
@@ -307,17 +302,18 @@ get_password() {
 	read -s -p "Enter Password: " first_entry
 	echo
 	read -s -p "Re-Enter Password: " second_entry
+	echo
 
 	if [[ "$first_entry" == "$second_entry" ]]; then
 		export BORG_PASSPHRASE="$first_entry"
 	else
-		echo -e "\nPasswords don't match. Please try again.\n"
+		eerror "Passwords don't match. Please try again."
 		get_password
 	fi
 
 	borg info "$BORG_REPO" > /dev/null 2>&1
 	if [[ $? -ne 0 ]]; then
-		echo -e "\n\nYour password for '$BORG_REPO' is incorrect. Exiting.\n"
+		ecrit "Your password for '$BORG_REPO' is incorrect. Exiting."
 		exit 1
 	fi
 }
@@ -326,7 +322,7 @@ validate_repo() {
 	if ! [[ -f "${1}/README" && "$(head -n 1 "${1}/README")" == "$REPO_STR" ]]; then
 		# according to https://borgbackup.readthedocs.io/en/stable/internals/data-structures.html#repository
 		# all BORG repositories contain a "README" file with the string "This is a Borg Backup repository."
-		echo -e "\nERROR: The path, '$1' does not contain a valid BORG repository. Exiting.\n"
+		ecrit "The path, '$1' does not contain a valid BORG repository. Exiting."
 		exit 2
 	else
 		return 0
@@ -341,12 +337,12 @@ validate_duplicate() {
 
 	if [[ ! -d "$duplicate_repo_path" ]]; then
 		# argument is not a valid directory
-		echo -e "\nWARN: Duplication path '$duplicate_repo_path' is not a valid directory and will be skipped.\n"
+		ewarn "Duplication path '$duplicate_repo_path' is not a valid directory and will be skipped."
 		return 1
 	elif awk '$1 !~ /^#/ && $2 ~ /^[/]/ {print $2}' /etc/fstab | grep -Fxq "$duplicate_repo_path"; then
 		# mountpoint command provided by util-linux - checks if duplicate_repo_path is mounted
 		if ! mountpoint -q "$duplicate_repo_path"; then
-			echo -e "\nWARN: '$duplicate_repo_path' isn't mounted and will be skipped.\n"
+			ewarn "'$duplicate_repo_path' isn't mounted and will be skipped."
 			return 1
 		fi
 	elif [[ $(ls -A "$duplicate_repo_path" | wc -l) -eq 0 ]]; then
@@ -358,7 +354,7 @@ validate_duplicate() {
 		return 0
 	else
 		# duplication directory is probably not a BORG repo, and we don't want to delete everything inside of it
-		echo -e "\nWARN: Duplication path '$duplicate_repo_path' is either non-empty or not a BORG repo and will be skipped.\n"
+		ewarn "Duplication path '$duplicate_repo_path' is either non-empty or not a BORG repo and will be skipped."
 		return 1
 	fi
 }
@@ -381,14 +377,16 @@ grab_value() {
 	gv_vref="${gv_vref%"${gv_vref##*[![:space:]\"]}"}" 
 }
 
-if [[ $dependchck -ne 0 ]]; then
-	printf '\n%s\n' "ERROR: $FILENAME depends on args2array."
+__init_messages__ "$@"
+
+if [[ ${__ARGS_LOADED__} -ne 1 ]]; then
+	ecrit "$FILENAME depends on args2array."
 	exit 1
 fi
 
 { printf '%s\n%s' "$MIN_BASH_VER" "$BASH_VERSION" | sort -C -V; } > /dev/null 2>&1	
 if [[ $? -ne 0 ]]; then
-	printf '\n%s\n' "ERROR: $FILENAME depends on coreutils v${MIN_COREUTIL_VER}+ and Bash v${MIN_BASH_VER}+. Your system is configured with"
+	ecrit "$FILENAME depends on coreutils v${MIN_COREUTIL_VER}+ and Bash v${MIN_BASH_VER}+. Your system is configured with"
 	printf '%-11s%s\n' "Coreutils:" "$(whoami --version | head -n 1 | awk '{print $NF}')"
 	printf '%-11s%s\n\n' "Bash:" "$BASH_VERSION"
 	exit 1
@@ -400,10 +398,22 @@ borg -V > /dev/null 2>&1
 	borg_version_check=$?
 
 if [[ $borg_install_check -ne 0 || $borg_version_check -ne 0 ]]; then
-	printf '\n%s\n' "ERROR: $FILENAME depends on BORG Backup v${MIN_BORG_VER}+. Your system is configured with"
+	ecrit "$FILENAME depends on BORG Backup v${MIN_BORG_VER}+. Your system is configured with"
 	printf '%-13s%s\n\n' "BORG Backup:" "$(borg -V | awk '{print $NF}')"
 	exit 1
 fi
+
+if [[ $# -eq 0 ]]; then
+	usage
+	exit 1
+fi
+
+if [[ $EUID -ne 0 ]]; then
+    ecrit "$FILENAME requires sudo privileges."
+    exit 1
+fi
+parse_config
+__open_logfile__
 
 typeset -A ARGS
 args2array ARGS "$@"
@@ -429,17 +439,11 @@ for arg in "${!ARGS[@]}"; do
 	esac
 done
 
-if [[ -v ARGS[h] || ${#ARGS[*]} -eq 0 ]]; then
+if [[ -v ARGS[h] ]]; then
 	usage
 	exit 0
-elif [[ $EUID -ne 0 ]]; then
-	echo -e "\n$FILENAME requires sudo privileges.\n"
-	exit 1
 else
-	[[ -v $ARGS[conf] ]] && CONFIGURATION_FILE="$CONF_ARG"
-	
-	parse_config
-
+	[[ -v ARGS[conf] ]] && CONFIGURATION_FILE="$CONF_ARG" && parse_config
 	[[ -v ARGS[repo] ]] && validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
 	[[ -v ARGS[pass] ]] && get_password
 	[[ -v ARGS[dest] ]] && export EXTRACT_TO="${ARGS[dest]}"

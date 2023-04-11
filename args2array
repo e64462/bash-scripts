@@ -1,5 +1,10 @@
 #!/bin/bash
 
+[[ ${__ARGS_LOADED__} -eq 1 ]] && return 0
+export __ARGS_LOADED__=1
+
+source /usr/local/bin/logging
+
 validate_option() {
 	# return 0 if option is valid and requires 1 or more arguments
 	# return 1 if option is valid and requires exactly 1 argument
@@ -77,12 +82,12 @@ expand_options() {
 					;;
 			2 ) _opts=("-${cmpd:$i:1}" "${_opts[@]}")
 				;;
-			3 ) echo "error: option '-${cmpd:$i:1}' is invalid."
+			3 ) ecrit "option '-${cmpd:$i:1}' is invalid."
 				exit 3
 				;;
 		esac
 		if [[ $_ctr -gt 1 ]]; then
-			echo "error: Two or more options '-${cmpd}' require an argument."
+			ecrit "Two or more options '-${cmpd}' require an argument."
 			exit 5
 		fi
 	done
@@ -94,7 +99,7 @@ args2array() {
 	local __exitcode __ctr=0 __i __exitcode __opt
 
 	while (( $# > 0 )); do	
-#		echo "first positional is '$1'"
+		etrace "first positional is '$1'"
 		if [[ ${1:0:1} == "-" ]]; then
 			# we're working with an option
 			if  [[ ! "${1:1:1}" == "-" && ${#1} > 2 ]]; then
@@ -110,16 +115,16 @@ args2array() {
 			else
 				__opt=${1#'-'}
 			fi
-#			echo "searching optstrings for '$__opt'"
+			etrace "searching optstrings for '$__opt'"
 			validate_option "$__opt"
 			__exitcode=$?
 			if [[ $__exitcode -gt 2 ]]; then
-				echo "error: option '$1' is not a valid option"
+				ecrit "option '$1' is not a valid option"
 				exit $__exitcode
 			else
-#				echo "hyphen-stripped param is: '$__opt' and __arr[$__opt] is '${__arr[$__opt]}'"
+				__ctr=0
+				edumpvar __opt __arr[$__opt]
 				if [[ $__exitcode -eq 0 ]]; then
-					__ctr=0
 					for __i in "${@:2}"; do
 						if [[ ${__i:0:1} == "-" ]]; then
 							break
@@ -129,13 +134,13 @@ args2array() {
 							else
 								__arr[$__opt]="${__arr[$__opt]};${__i}"
 							fi
-#							echo "appending: '${__arr[$__opt]}'$__i' ' to __arr[$__opt]"
+							etrace "appending: '$__i' ' to __arr[$__opt] which is now '${__arr[$__opt]}'"
 							(( __ctr++ ))
-#							echo "__arr[$__opt] is now '${__arr[$__opt]}'"
+							etrace "__arr[$__opt] is now '${__arr[$__opt]}'"
 						fi
 					done
 					if [[ $__ctr -eq 0 ]]; then
-						echo "error: option '$1' requires an argument"
+						ecrit "option '$1' requires an argument"
 						exit 1
 					fi
 				elif [[ $__exitcode -eq 1 ]]; then
@@ -148,25 +153,25 @@ args2array() {
 							__ctr=1
 						else
 							# too many arguments passed, no bueno
-							echo "error: option '$1' takes exactly one argument"
+							ecrit "option '$1' takes exactly one argument"
 							exit 5
 						fi
 					else
 						# not enough arguments passed, no bueno
-						echo "error: option '$1' takes exactly one argument"
+						ecrit "option '$1' takes exactly one argument"
 						exit 5
 					fi
 				else
 					# option does not accept any arguments
 					if [[ -n "$2" && ${2:0:1} != "-" ]]; then
 						# too many arguments passed to the option
-						echo "error: option '$1' does not take any argument"
+						ecrit "option '$1' does not take any argument"
 						exit 5
 					else
 						__arr[$__opt]=""
-						__ctr=0
 					fi
 				fi
+				edumpvar __opt __arr[$__opt]
 				# all 3 blocks require a shift because each corresponds to a valid option which should be removed
 				shift $(( __ctr + 1 ))
 			fi
