@@ -1,0 +1,16 @@
+#!/bin/bash
+
+if [[ $EUID -ne 0 ]]; then
+	echo "This file must be called with sudo privileges"
+	exit 1
+fi
+
+mkdir -p /usr/local/lib/backUP /usr/local/etc/backUP
+cp backUP /usr/local/bin
+cp args2array /usr/local/lib/backUP
+cp logging /usr/local/lib/backUP
+chmod 755 /usr/local/bin /usr/local/lib/backUP /usr/local/lib/backUP
+chown root:root /usr/local/bin /usr/local/lib/backUP /usr/local/lib/backUP
+touch /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt
+chmod 660 /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt
+chown root:root /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt

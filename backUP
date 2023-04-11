@@ -1,9 +1,9 @@
 #!/usr/bin/bash
 
-source /usr/local/bin/logging
-source /usr/local/bin/args2array
+source /usr/local/lib/backUP/logging
+source /usr/local/lib/backUP/args2array
 
-CONFIGURATION_FILE='/etc/backUP.conf'
+CONFIGURATION_FILE='/usr/local/etc/backUP/backUP.conf'
 MIN_BASH_VER='4.0'
 MIN_BORG_VER='1.2.3'
 MIN_COREUTIL_VER='7.0'

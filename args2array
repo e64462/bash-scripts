@@ -3,7 +3,7 @@
 [[ ${__ARGS_LOADED__} -eq 1 ]] && return 0
 export __ARGS_LOADED__=1
 
-source /usr/local/bin/logging
+source /usr/local/lib/backUP/logging
 
 validate_option() {
 	# return 0 if option is valid and requires 1 or more arguments
