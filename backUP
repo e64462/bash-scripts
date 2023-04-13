@@ -55,8 +55,11 @@ exit 1
 }
 
 parse_config() {
+	# don't allow multiple configuration files to pollute each other
+	unset __LOG_STOUT__ __LOG_LEVEL__ __LOGPATH__ BORG_PASSPHRASE 
+	unset BORG_REPO BACKUP_DB SOME_USER EXTRACT_TO dupe_paths
 	export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
-	typeset -A config
+	local -A config verb
 
 	config=(
 		[BORG_PASSPHRASE]=""
@@ -65,6 +68,7 @@ parse_config() {
 		[SOME_USER]="$SUDO_USER"
 		[EXTRACT_TO]=""
 	)
+	verb=( [STOUT]=0 [CRIT]=1 [ERROR]=2	[DEBUG]=3 [TRACE]=4	)
 
 	while read line; do
 		# skip processing lines that begin with '#'
@@ -92,11 +96,26 @@ parse_config() {
 
 	done < "$CONFIGURATION_FILE"
 
+	if [[ "${config[LOGSTOUT]}" == "true" || "${config[LOGSTOUT]}" == "1"  ]]; then
+        export __LOG_STOUT__=1
+    fi
+    if [[ -n "${config[LOGLEVEL]}" ]]; then
+        if [[ "${verb[${config[LOGLEVEL]}]+1}" ]]; then
+            export __LOG_LEVEL__=${verb[${config[LOGLEVEL]}]}
+        else
+            ewarn "$FILENAME does not recognize configuration option LOGLEVEL = ${config[LOGLEVEL]}"
+        fi
+    fi
+	if [[ -n "${config[LOGPATH]}" ]]; then
+        export __LOGPATH__="${config[LOGPATH]}"
+        __open_logfile__
+    fi
+
 	export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
 	export BORG_REPO="${config[BORG_REPO]}"
 	export BACKUP_DB="${config[BACKUP_DB]}"
 	export SOME_USER="${config[SOME_USER]}"
-	export __LOGPATH__="${config[LOGPATH]}"
+	
 	if [[ -z "${config[EXTRACT_TO]}" ]]; then
 		export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
 	else
@@ -267,12 +286,17 @@ borg_compact_and_prune() {
 duplicate_borg_repo() {
 	local primary_repo="$(realpath -mq "$BORG_REPO")/"	# strip excessive trailing slashes
 
-	if [[ ${#dupe_paths[@]} -gt 0 ]]; then
-		for secondary_repo in "${dupe_paths[@]}"; do
-			rsync -au --delete "$primary_repo" "$secondary_repo"  > /dev/null
-		done
+	if validate_repo "$primary_repo"; then
+		if [[ ${#dupe_paths[@]} -gt 0 ]]; then
+			for secondary_repo in "${dupe_paths[@]}"; do
+				rsync -au --delete "$primary_repo" "$secondary_repo"  > /dev/null
+			done
+		else
+			ewarn "No duplication paths specified. '$primary_repo' will not be duplicated"
+		fi
 	else
-		ewarn "No duplication paths specified. '$primary_repo' will not be duplicated"
+		ecrit "BORG repo '$primary_repo' is not valid. This shouldn't have happened"
+		exit 1
 	fi
 }
 
@@ -295,7 +319,7 @@ print_database() {
 			else
 				printf "%-8s%-8s%s\n" "$counter" "$entry_type" "$line"
 			fi
-		done < $BACKUP_DB
+		done < "$BACKUP_DB"
 }
 
 get_password() {
@@ -384,6 +408,11 @@ if [[ ${__ARGS_LOADED__} -ne 1 ]]; then
 	exit 1
 fi
 
+if [[ ${__LOGS_LOADED__} -ne 1 ]]; then
+	ecrit "$FILENAME depends on logging."
+	exit 1
+fi
+
 { printf '%s\n%s' "$MIN_BASH_VER" "$BASH_VERSION" | sort -C -V; } > /dev/null 2>&1	
 if [[ $? -ne 0 ]]; then
 	ecrit "$FILENAME depends on coreutils v${MIN_COREUTIL_VER}+ and Bash v${MIN_BASH_VER}+. Your system is configured with"
@@ -412,10 +441,9 @@ if [[ $EUID -ne 0 ]]; then
     ecrit "$FILENAME requires sudo privileges."
     exit 1
 fi
-parse_config
-__open_logfile__
 
-typeset -A ARGS
+parse_config
+declare -A ARGS
 args2array ARGS "$@"
 
 for arg in "${!ARGS[@]}"; do
@@ -444,6 +472,8 @@ if [[ -v ARGS[h] ]]; then
 	exit 0
 else
 	[[ -v ARGS[conf] ]] && CONFIGURATION_FILE="$CONF_ARG" && parse_config
+	# need to add some sanity checks here... so that two configs don't conflict with each other..
+
 	[[ -v ARGS[repo] ]] && validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
 	[[ -v ARGS[pass] ]] && get_password
 	[[ -v ARGS[dest] ]] && export EXTRACT_TO="${ARGS[dest]}"
@@ -457,6 +487,7 @@ else
 	[[ -v ARGS[L] ]] && print_database
 
 	duplicate_borg_repo
+	__end_messages__
 fi
 
 exit 0

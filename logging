@@ -4,7 +4,6 @@
 export __LOGS_LOADED__=1
 
 __JOB__="$(basename "$0" '.sh')"
-__MSGPATH__="/var/run/${__JOB__}/$$"
 
 _black_='\033[0;30m'
 _red_='\033[0;31m'
@@ -23,21 +22,29 @@ function einfo()   { __verb__=2 elog "_white_"  "INFO"  "$*" ;}
 function edebug()  { __verb__=3 elog "_green_"  "DEBUG" "$*" ;}
 function etrace()  { __verb__=4 elog "_cyan_"   "TRACE" "$*" ;}
 
-## esilent prints output even in silent mode
+## eprint outputs irrespective of verbosity
 function eprint() { __verb__=0 elog "_lgreen_" "*" "$*" ;}
 function edumpvar() { local -a a=(); for var in "$@"; do a+=("$var = '${!var}'  "); done; etrace "${FUNCNAME[1]} :::: ${a[*]}"; }
 
 function elog() {
+#	if ! [[ -v cccombo_breaker ]]; then
+#			local cccombo_breaker=1
+#			edebug "${FUNCNAME[2]} called ${FUNCNAME[1]} and __L_O__ is '${__LOG_OPEN__}' & __L_L__ is '${__LOG_LEVEL__}' & __v__ is '${__verb__}' FUNCNAME is '${#FUNCNAME[@]}' long"
+#			edumpvar __LOG_OPEN__ __LOG_LEVEL__ __verb__
+#	fi
 	if [[ ${verbosity:-2} -ge ${__verb__} ]]; then
-		if [[ -n ${__LOG_OPEN__} ]]; then
-			printf "%(%Y-%m-%d %H:%M:%S)T  ${!1}%5s${_reset_}  %s\n" -1 "$2" "$3" >>"${__LOG__}"
-		fi
 		printf "${!1}%5s${_reset_}  %s\n" "$2" "$3" >&${__STOUTFD__}
+	fi
+	if [[ -n ${__LOG_OPEN__} && ${__LOG_LEVEL__} -ge ${__verb__} ]]; then
+		printf "%(%Y-%m-%d %H:%M:%S)T  ${!1}%5s${_reset_}  %s\n" -1 "$2" "$3" >>"${__LOG__}"
 	fi
 }
 
 function dlog() {
 	if [[ -n ${__LOG_OPEN__} ]]; then
+		if [[ -n ${__LOG_STOUT__} ]]; then
+			dd if="${__STOUT_PIPE__}" iflag=nonblock status=none 2>/dev/null
+		fi
 		printf "%(%Y-%m-%d %H:%M:%S)T  ${!1}%-7s${_reset_}%b\n" -1 "$2" "$3" >>"${__LOG__}"
 	else
 		edebug "Failed to write '$3' to file because the Log File is Closed."
@@ -65,22 +72,50 @@ function __open_logfile__() {
 	if [[ -z ${__LOG_OPEN__} ]]; then
 		if [[ -d ${__LOGPATH__} ]]; then
 			__LOG__="${__LOGPATH__}/LOG_${__JOB__}.txt"
-			exec {__LOGFD__}<>"${__LOG__}"
-			exec {__STOUTFD__}>&1
-			exec {__STERRFD__}>&2
-			__LOG_OPEN__=1
-			[[ -n ${__LOG_STOUT__} ]] && exec 1>&${__LOGFD__} 
-			[[ -n ${__LOG_STERR__} ]] && exec 2>&${__LOGFD__}
-			trap __end_messages__ EXIT
+			if ! [[ -e ${__LOG__} ]]; then
+				local user=$(awk -F':' -v uid=$EUID '$3 == uid {print $1}' /etc/passwd)
+				install -o "$user" -g "$user" -m 660 /dev/null "${__LOG__}"
+			fi
+			
+			exec {__LOGFD__}>>"${__LOG__}" # only used to keep the file open...
+
+			__LOG_OPEN__=1  
 			dlog "_white_" "LOGS" "SESSION OPENED"
+
+			if [[ -n ${__LOG_STOUT__} ]]; then
+				local user=$(awk -F':' -v uid=$EUID '$3 == uid {print $1}' /etc/passwd)
+				install -o "$user" -g "$user" -m 700 -d "/run/${__JOB__}/$$"
+				__SO_PIPE_PATH__="/run/${__JOB__}/$$"
+				__STOUT_PIPE__="${__SO_PIPE_PATH__}/messages.pipe"
+				__FORMATED_OUTPUT_PIPE__="${__SO_PIPE_PATH__}/filter.pipe"
+				mkfifo -m 700 "${__STOUT_PIPE__}" "${__FORMATED_OUTPUT_PIPE__}"
+				exec {__SO_PIPE_FD__}<>"${__STOUT_PIPE__}"
+
+				sed -u 's/^/   /' "${__STOUT_PIPE__}" > "${__FORMATED_OUTPUT_PIPE__}" &
+				__SED_PID__=$!
+				tee -a "${__LOG__}" < "${__FORMATED_OUTPUT_PIPE__}" >&${__STOUTFD__} &
+				__TEE_PID__=$!
+			   	exec 1>>"${__STOUT_PIPE__}"
+				
+				edebug "${FUNCNAME[0]} inherited stout and sterr pointers from __init_messages__ on FD: '${__STOUTFD__}' and FD: '${__STERRFD__}' respectively"
+				edebug "Pipe initialized on FD: '${__SO_PIPE_FD__}' pointing to '${__STOUT_PIPE__}'"
+				edebug "Tee reading from '${__STOUT_PIPE__}' on PID: '${__TEE_PID__}.' Appending to: '${__LOG__}' and FD: '${__STOUTFD__}'"
+				if [[ ${__LOG_LEVEL__} -ge 3 ]]; then
+					ls -Alh /proc/$$/fd | awk '{ print $(NF-2), $(NF-1), $NF}' | tail -n +2 >"${__STOUT_PIPE__}"
+				fi
+				edumpvar user __STOUT_PIPE__ __SO_PIPE_FD__ __TEE_PID__
+			fi
+			[[ -n ${__LOG_STERR__} ]] && exec 2>>"${__LOG__}"
+			trap __end_messages__ EXIT
 			edebug "Logging to '${__LOG__}'"
 			edumpvar __LOG_OPEN__ __LOGPATH__ __LOG__
+			edumpvar __LOG_STOUT__ __LOGFD__ __STOUTFD__ __STERRFD__
 		else
-			ecrit "__LOGPATH__ is not a directory. Logging disabled."
+			ewarn "__LOGPATH__ is not a directory. Logging disabled."
 			return 1
 		fi
 	else
-		ecrit "__LOGPATH__ is unset. Logging disabled."
+		edebug "Log File: '${__LOG__}' already open."
 		return 1
 	fi
 }
@@ -90,6 +125,13 @@ function __end_messages__() {
 	[[ -v __LOGFD__ ]] && exec {__LOGFD__}>&-
 	exec 1>&${__STOUTFD__}-
 	exec 2>&${__STERRFD__}-
+	if [[ -n ${__LOG_STOUT__} ]]; then
+		kill ${__TEE_PID__} ${__SED_PID__}
+		exec {__SO_PIPE_FD__}>&-
+		rm -r "${__SO_PIPE_PATH__}"
+		unset __LOG_STOUT__
+	fi
+	unset __LOG_OPEN__ __LOGS_LOADED__ __STOUTFD__ __STERRFD__ __LOG__ __LOGPATH__ __LOGFD__ __TEE_PID__ __SO_PIPE_PATH__
 	trap - EXIT
 }
 

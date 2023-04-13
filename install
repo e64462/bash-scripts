@@ -5,12 +5,13 @@ if [[ $EUID -ne 0 ]]; then
 	exit 1
 fi
 
+chown root:root logging args2array backUP install
+chmod 755 logging args2array backUP
 mkdir -p /usr/local/lib/backUP /usr/local/etc/backUP
-cp backUP /usr/local/bin
-cp args2array /usr/local/lib/backUP
-cp logging /usr/local/lib/backUP
-chmod 755 /usr/local/bin /usr/local/lib/backUP /usr/local/lib/backUP
-chown root:root /usr/local/bin /usr/local/lib/backUP /usr/local/lib/backUP
+ln -f backUP /usr/local/bin
+ln -f args2array /usr/local/lib/backUP
+ln -f logging /usr/local/lib/backUP
+
 touch /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt
 chmod 660 /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt
 chown root:root /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt
