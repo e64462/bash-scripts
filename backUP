@@ -97,19 +97,19 @@ parse_config() {
 	done < "$CONFIGURATION_FILE"
 
 	if [[ "${config[LOGSTOUT]}" == "true" || "${config[LOGSTOUT]}" == "1"  ]]; then
-        export __LOG_STOUT__=1
-    fi
-    if [[ -n "${config[LOGLEVEL]}" ]]; then
-        if [[ "${verb[${config[LOGLEVEL]}]+1}" ]]; then
-            export __LOG_LEVEL__=${verb[${config[LOGLEVEL]}]}
-        else
-            ewarn "$FILENAME does not recognize configuration option LOGLEVEL = ${config[LOGLEVEL]}"
-        fi
-    fi
+		export __LOG_STOUT__=1
+	fi
+	if [[ -n "${config[LOGLEVEL]}" ]]; then
+		if [[ "${verb[${config[LOGLEVEL]}]+1}" ]]; then
+			export __LOG_LEVEL__=${verb[${config[LOGLEVEL]}]}
+		else
+			ewarn "$FILENAME does not recognize configuration option LOGLEVEL = ${config[LOGLEVEL]}"
+		fi
+	fi
 	if [[ -n "${config[LOGPATH]}" ]]; then
-        export __LOGPATH__="${config[LOGPATH]}"
-        __open_logfile__
-    fi
+		export __LOGPATH__="${config[LOGPATH]}"
+		__open_logfile__
+	fi
 
 	export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
 	export BORG_REPO="${config[BORG_REPO]}"
@@ -124,6 +124,7 @@ parse_config() {
 }
 
 append_to_backup_list() {
+	local argument
 	for argument in "$@"; do 
 		if [[ ! -f "$argument" && ! -d "$argument" ]]; then
 			ecrit "Path '$argument' doesn't seem to exist. Exiting."
@@ -132,10 +133,10 @@ append_to_backup_list() {
 	done
 	for argument in "$@"; do
 		# normalize the input
-		file=$(readlink -e "$argument")
-		if ! grep -Fxq "$file" $BACKUP_DB; then
+		file="$(readlink -e "$argument")"
+		if ! grep -Fxq "$file" "$BACKUP_DB"; then
 			eprint "Appending '$file' to '$BACKUP_DB'"
-			echo "$file" >> $BACKUP_DB
+			echo "$file" >> "$BACKUP_DB"
 		else
 			ewarn "Entry for '$file' already exists in '$BACKUP_DB'"
 		fi
@@ -144,21 +145,21 @@ append_to_backup_list() {
 }
 
 remove_from_backup_list() {
-	num_lines=$(wc -l $BACKUP_DB | awk '{print $1}')
-	
-	typeset -A lines_passed
+	local -i db_entry_line_num num_lines=$(wc -l "$BACKUP_DB" | awk '{print $1}')
+	local -A lines_passed
+	local argument db_entry
 
 	for argument in "$@"; do
 		if [[ $argument =~ $IS_NUM_REGEX && $argument -le $num_lines ]]; then
 			# function received a number less than or equal to the number of borg backups
-			db_entry=$(sed -n "$argument{p;q}" $BACKUP_DB)
-			db_entry_line_num=$argument
+			db_entry=$(sed -n "$argument{p;q}" "$BACKUP_DB")
+			db_entry_line_num="$argument"
 		else
-			file=$(readlink -e "$argument")
-			if grep -Fxq "$file" $BACKUP_DB; then
+			file="$(readlink -e "$argument")"
+			if grep -Fxq "$file" "$BACKUP_DB"; then
 			# function received an entry tracked by the database
-				db_entry=$file
-				db_entry_line_num=$(grep -nFx "$file" $BACKUP_DB | cut -f1 -d:)
+				db_entry="$file"
+				db_entry_line_num="$(grep -nFx "$file" "$BACKUP_DB" | cut -f1 -d:)"
 			else
 				# function does not recognize the argument received
 				ecrit  "No match to '$file' found in '$BACKUP_DB'"
@@ -168,19 +169,20 @@ remove_from_backup_list() {
 		lines_passed["$db_entry_line_num"]="$db_entry"
 	done
 	
-	sed_string=""
+	local sed_string=""
 	for key in "${!lines_passed[@]}"; do
 		eprint "Removing '${lines_passed[$key]}' from '$BACKUP_DB'"
 		sed_string+="${key}d;"
 	done
 	
-	sed -i "${sed_string%;}" $BACKUP_DB
+	sed -i "${sed_string%;}" "$BACKUP_DB"
 }
 
 parse_parents() {
+	local line
 	while read line; do
 		printf '%s\n' "$line"
-	done < $BACKUP_DB | \
+	done < "$BACKUP_DB" | \
 
 	# The commands below (recursively?) creates a unique entry for the full *parent* directory structure 
 	# pointing to the file/folder we want backed up,
@@ -196,7 +198,7 @@ recurse_directories() {
 			# this recursively prints all files and subdirectories of the folder we wish to backup
 			find "$line" -print
 		fi
-	done < $BACKUP_DB
+	done < "$BACKUP_DB"
 }
 
 create_borg_backup() {
@@ -209,7 +211,7 @@ create_borg_backup() {
 list_borg_backups() {
 	printf "\n%-8s%s\n" "#" "ARCHIVE NAME"
 	printf "%s%s\n" "------  ------------"
-	counter=0
+	local -i counter
 	borg list "$BORG_REPO"	2>/dev/null | \
 		while read line; do
 			((counter+=1))
@@ -225,7 +227,8 @@ list_borg_backups() {
 }
 
 restore_borg_backup() {
-	num_archives=$(borg list "$BORG_REPO" 2>/dev/null | wc -l)
+	local -i num_archives=$(borg list "$BORG_REPO" 2>/dev/null | wc -l)
+	local borg_archive
 	# Don't change permissions of /
 	if [[ ! -d "$EXTRACT_TO" ]]; then
 		install -d -m 0755 -o "$SOME_USER" -g "$SOME_USER" "$EXTRACT_TO"
@@ -239,7 +242,7 @@ restore_borg_backup() {
 	fi
 
 	eprint "Extracting '$borg_archive' to '$EXTRACT_TO'."
-	workingdir=$(pwd)
+	local workingdir=$(pwd)
 	cd "$EXTRACT_TO"
 	borg extract "$BORG_REPO::$borg_archive" 2>/dev/null
 	if [[ $? -ne 0 ]]; then
@@ -260,20 +263,20 @@ search() {
 			echo
 		done   | \
 			awk 'BEGIN { empty = 0 } {
-		 	if ($0 == "") {
-		 		if (NR - empty == 3) {
-		 			start = 0
-		 		} else {
-		 			print data
-		 		}
-		 		empty = NR
-		 		data = ""
-		 	} else {
-		 		if (start == 0) {
-		 			start = NR
-		 		}
-		 		data = data "\n" $0
-		 	}
+			if ($0 == "") {
+				if (NR - empty == 3) {
+					start = 0
+				} else {
+					print data
+				}
+				empty = NR
+				data = ""
+			} else {
+				if (start == 0) {
+					start = NR
+				}
+				data = data "\n" $0
+			}
 		 }
 		 END { print data }'
 }
@@ -289,7 +292,12 @@ duplicate_borg_repo() {
 	if validate_repo "$primary_repo"; then
 		if [[ ${#dupe_paths[@]} -gt 0 ]]; then
 			for secondary_repo in "${dupe_paths[@]}"; do
-				rsync -au --delete "$primary_repo" "$secondary_repo"  > /dev/null
+				rsync -au --delete --timeout=1 "$primary_repo" "$secondary_repo"  > /dev/null
+				if [[ $? -ne 0 ]]; then
+					ewarn "rsync encountered an error duplicating '$primary_repo' to '$secondary_repo'"
+				else
+					edebug "Successfully duplicated to '$secondary_repo'"
+				fi
 			done
 		else
 			ewarn "No duplication paths specified. '$primary_repo' will not be duplicated"
@@ -303,7 +311,7 @@ duplicate_borg_repo() {
 print_database() {
 	printf "\n%-8s%-8s%s\n" "#" "TYPE" "PATH"
 	printf "%s%s%s\n" "------  ------  ------"
-	counter=0
+	local -i counter
 		while read line; do
 			if [[ -d $line ]]; then
 				entry_type="Folder"
@@ -323,6 +331,7 @@ print_database() {
 }
 
 get_password() {
+	local first_entry second_entry
 	read -s -p "Enter Password: " first_entry
 	echo
 	read -s -p "Re-Enter Password: " second_entry
@@ -438,8 +447,8 @@ if [[ $# -eq 0 ]]; then
 fi
 
 if [[ $EUID -ne 0 ]]; then
-    ecrit "$FILENAME requires sudo privileges."
-    exit 1
+	ecrit "$FILENAME requires sudo privileges."
+	exit 1
 fi
 
 parse_config
@@ -472,8 +481,6 @@ if [[ -v ARGS[h] ]]; then
 	exit 0
 else
 	[[ -v ARGS[conf] ]] && CONFIGURATION_FILE="$CONF_ARG" && parse_config
-	# need to add some sanity checks here... so that two configs don't conflict with each other..
-
 	[[ -v ARGS[repo] ]] && validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
 	[[ -v ARGS[pass] ]] && get_password
 	[[ -v ARGS[dest] ]] && export EXTRACT_TO="${ARGS[dest]}"
