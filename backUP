@@ -72,9 +72,7 @@ parse_config() {
 
 	while read line; do
 		# skip processing lines that begin with '#'
-		if [[ "$line" =~ ^#.*$ ]]; then 
-			continue
-		fi
+		[[ "$line" =~ ^#.*$ ]] && continue
 		
 		if echo "$line" | grep -F = &>/dev/null; then
 			grab_key "$line" varname
@@ -99,6 +97,11 @@ parse_config() {
 	if [[ "${config[LOGSTOUT]}" == "true" || "${config[LOGSTOUT]}" == "1"  ]]; then
 		export __LOG_STOUT__=1
 	fi
+
+	if [[ "${config[LOGSTERR]}" == "true" || "${config[LOGSTERR]}" == "1" ]]; then
+		export __LOG_STERR__=1
+	fi
+
 	if [[ -n "${config[LOGLEVEL]}" ]]; then
 		if [[ "${verb[${config[LOGLEVEL]}]+1}" ]]; then
 			export __LOG_LEVEL__=${verb[${config[LOGLEVEL]}]}
@@ -205,16 +208,18 @@ create_borg_backup() {
 	eprint "Creating new backup '$DATE' in '$BORG_REPO'"
 
 	{ parse_parents && recurse_directories; } | sort -u | \
-		borg create --paths-from-stdin "$BORG_REPO::$DATE" 2>/dev/null
+		borg create --paths-from-stdin "$BORG_REPO::$DATE" 
 }
 
 list_borg_backups() {
-	printf "\n%-8s%s\n" "#" "ARCHIVE NAME"
-	printf "%s%s\n" "------  ------------"
 	local -i counter
-	borg list "$BORG_REPO"	2>/dev/null | \
+	borg list "$BORG_REPO" | \
 		while read line; do
 			((counter+=1))
+			if [[ $counter -eq 1 ]]; then
+				printf "\n%-8s%s\n" "#" "ARCHIVE NAME"
+				printf "%s%s\n" "------  ------------"
+			fi
 			archive_name=$(echo $line | awk '{print $1}')
 			if [[ $# -eq 0 ]]; then
 				printf "%-8s%s\n" "$counter" "$archive_name"
@@ -224,10 +229,11 @@ list_borg_backups() {
 				printf "%-8s%s\n" "$counter" "$archive_name"
 			fi
 		done 
+		printf "\n"
 }
 
 restore_borg_backup() {
-	local -i num_archives=$(borg list "$BORG_REPO" 2>/dev/null | wc -l)
+	local -i num_archives=$(borg list "$BORG_REPO" | wc -l)
 	local borg_archive
 	# Don't change permissions of /
 	if [[ ! -d "$EXTRACT_TO" ]]; then
@@ -236,7 +242,7 @@ restore_borg_backup() {
 
 	if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_archives ]]; then
 		# function received a number that is less than or equal to the number of borg backups
-		borg_archive=$(borg list "$BORG_REPO" 2>/dev/null | sed -n "$1{p;q}" | awk '{print $1}')
+		borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
 	else	
 		borg_archive=$1
 	fi
@@ -244,7 +250,7 @@ restore_borg_backup() {
 	eprint "Extracting '$borg_archive' to '$EXTRACT_TO'."
 	local workingdir=$(pwd)
 	cd "$EXTRACT_TO"
-	borg extract "$BORG_REPO::$borg_archive" 2>/dev/null
+	borg extract "$BORG_REPO::$borg_archive" 
 	if [[ $? -ne 0 ]]; then
 		eerror "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
 		eerror "Use '$FILENAME -l' to display a list of all valid archives."
@@ -256,10 +262,10 @@ restore_borg_backup() {
 
 search() {
 	local a
-	borg list --short "$BORG_REPO" 2>/dev/null | \
+	borg list --short "$BORG_REPO"	| \
 		while read -r a; do
 			printf "%s\n%s\n" "${a}" "----------------------"
-			borg list --short "${BORG_REPO}::$a" 2>/dev/null | grep "$1"
+			borg list --short "${BORG_REPO}::$a"  | grep "$1"
 			echo
 		done   | \
 			awk 'BEGIN { empty = 0 } {
@@ -282,8 +288,8 @@ search() {
 }
 
 borg_compact_and_prune() {
-	borg prune --list --keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO" 2>/dev/null	
-	borg compact "$BORG_REPO" 2>/dev/null
+	borg prune --list --keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO"		
+	borg compact "$BORG_REPO" 
 }
 
 duplicate_borg_repo() {
