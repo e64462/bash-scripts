@@ -86,24 +86,41 @@ function __open_logfile__() {
 				local user=$(awk -F':' -v uid=$EUID '$3 == uid {print $1}' /etc/passwd)
 				install -o "$user" -g "$user" -m 700 -d "/run/${__JOB__}/$$"
 				__SO_PIPE_PATH__="/run/${__JOB__}/$$"
-				__STOUT_PIPE__="${__SO_PIPE_PATH__}/messages.pipe"
+				__STOUT_PIPE__="${__SO_PIPE_PATH__}/somessages.pipe"
 				mkfifo -m 700 "${__STOUT_PIPE__}" 
 				exec {__SO_PIPE_FD__}<>"${__STOUT_PIPE__}"
 
 				sed -u 's/^/   /' "${__STOUT_PIPE__}" > >(tee -a "${__LOG__}" >&"${__STOUTFD__}") &
-				__SED_PID__=$!
+				__SED_SO_PID__=$!
 				exec 1>>"${__STOUT_PIPE__}"
 				
 				edebug "${FUNCNAME[0]} inherited stout from __init_messages__ on FD: '${__STOUTFD__}'"
-				edebug "${FUNCNAME[0]} inherited sterr from __init_messages__ on FD: '${__STERRFD__}'"
 				edebug "Pipe initialized on FD: '${__SO_PIPE_FD__}' pointing to '${__STOUT_PIPE__}'"
-				edebug "Sed filtering FD: '${__STOUT_PIPE__}' on PID: '${__SED_PID__}.' Appending output to: '${__LOG__}' and FD: '${__STOUTFD__}'"
-				if [[ ${__LOG_LEVEL__} -ge 4 || ${verbosity} -ge 4 ]]; then
-					ls -Alh /proc/$$/fd | awk '{ print $(NF-2), $(NF-1), $NF}' | tail -n +2 > "${__STOUT_PIPE__}"
-				fi
-				edumpvar user __STOUT_PIPE__ __SO_PIPE_FD__ __TEE_PID__
+				edebug "Sed filtering '${__STOUT_PIPE__}' on PID: '${__SED_SO_PID__}.' Appending output to: '${__LOG__}' and FD: '${__STOUTFD__}'"
+				edumpvar user __STOUT_PIPE__ __SO_PIPE_FD__ __SED_SO_PID__
 			fi
-			[[ -n ${__LOG_STERR__} ]] && exec 2>>"${__LOG__}"
+
+			if [[ -n ${__LOG_STERR__} ]]; then
+				local user=$(awk -F':' -v uid=$EUID '$3 == uid {print $1}' /etc/passwd)
+                install -o "$user" -g "$user" -m 700 -d "/run/${__JOB__}/$$"
+                __SE_PIPE_PATH__="/run/${__JOB__}/$$"
+                __STERR_PIPE__="${__SE_PIPE_PATH__}/semessages.pipe"
+                mkfifo -m 700 "${__STERR_PIPE__}"
+                exec {__SE_PIPE_FD__}<>"${__STERR_PIPE__}"
+
+                sed -u -r -e "s/^/  \x1b\[0;31m/" -e "s/$/\x1b\[0m/" "${__STERR_PIPE__}" > >(tee -a "${__LOG__}" >&"${__STERRFD__}") &
+                __SED_SE_PID__=$!
+                exec 2>>"${__STERR_PIPE__}"
+
+                edebug "${FUNCNAME[0]} inherited sterr from __init_messages__ on FD: '${__STERRFD__}'"
+                edebug "Pipe initialized on FD: '${__SE_PIPE_FD__}' pointing to '${__STERR_PIPE__}'"
+                edebug "Sed filtering '${__STERR_PIPE__}' on PID: '${__SED_SE_PID__}.' Appending output to: '${__LOG__}' and FD: '${__STERRFD__}'"
+                edumpvar user __STERR_PIPE__ __SE_PIPE_FD__ __SED_SE_PID__
+			fi
+
+			if [[ ${__LOG_LEVEL__} -ge 4 || ${verbosity} -ge 4 ]]; then
+                    ls -Alh /proc/$$/fd | awk '{ print $(NF-2), $(NF-1), $NF}' | tail -n +2 > "${__STOUT_PIPE__}"
+            fi
 			trap __end_messages__ EXIT
 			edebug "Logging to '${__LOG__}'"
 			edumpvar __LOG_OPEN__ __LOGPATH__ __LOG__
@@ -124,12 +141,18 @@ function __end_messages__() {
 	exec 1>&${__STOUTFD__}-
 	exec 2>&${__STERRFD__}-
 	if [[ -n ${__LOG_STOUT__} ]]; then
-		kill ${__SED_PID__} 
+		kill ${__SED_SO_PID__} 
 		exec {__SO_PIPE_FD__}>&-
 		rm -r "${__SO_PIPE_PATH__}"
 		unset __LOG_STOUT__
 	fi
-	unset __LOG_OPEN__  __STOUTFD__ __STERRFD__ __LOG__ __LOGPATH__ __LOGFD__ __SED_PID__ __SO_PIPE_PATH__
+	if [[ -n ${__LOG_STERR__} ]]; then
+		kill ${__SED_SE_PID__}
+		exec {__SE_PIPE_FD__}>&-
+		[[ -d ${__SE_PIPE_PATH__} ]] && rm -r "${__SE_PIPE_PATH__}"
+		unset __LOG_STERR__
+	fi
+	unset __LOG_OPEN__  __STOUTFD__ __STERRFD__ __LOG__ __LOGPATH__ __LOGFD__ __SED_SO_PID__ __SO_PIPE_PATH__ __SE_PIPE_PATH__ __SED_SE_PID__
 	trap - EXIT
 }
 
