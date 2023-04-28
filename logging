@@ -3,6 +3,8 @@
 [[ ${__LOGS_LOADED__} -eq 1 ]] && return 0
 export __LOGS_LOADED__=1
 
+shopt -s extglob # required to consistently extract the verbosity from positional parameters
+
 __JOB__="$(basename "$0" '.sh')"
 
 _black_='\033[0;30m'
@@ -16,15 +18,15 @@ _lgreen_='\033[0;92m'
 _reset_='\033[0m'
 
 function ecrit()   { __verb__=1 elog "_purple_" "FATAL" "$*" ;}
-function eerror()  { __verb__=2 elog "_red_"	"ERROR" "$*" ;}
+function eerror()  { __verb__=2 elog "_red_"    "ERROR" "$*" ;}
 function ewarn()   { __verb__=2 elog "_yellow_" "WARN"	"$*" ;}
-function einfo()   { __verb__=2 elog "_white_"	"INFO"	"$*" ;}
-function edebug()  { __verb__=3 elog "_green_"	"DEBUG" "$*" ;}
-function etrace()  { __verb__=4 elog "_cyan_"	"TRACE" "$*" ;}
+function einfo()   { __verb__=2 elog "_white_"  "INFO"	"$*" ;}
+function edebug()  { __verb__=3 elog "_green_"  "DEBUG" "$*" ;}
+function etrace()  { __verb__=4 elog "_cyan_"   "TRACE" "$*" ;}
 
 ## eprint outputs irrespective of verbosity
 function eprint() { __verb__=0 elog "_lgreen_" "*" "$*" ;}
-function edumpvar() { local -a a=(); for var in "$@"; do a+=("$var = '${!var}'	"); done; etrace "${FUNCNAME[1]} :::: ${a[*]}"; }
+function edumpvar() { local -a a=(); for var in "$@"; do a+=("$var = '${!var}' "); done; etrace "${FUNCNAME[1]} :::: ${a[*]}"; }
 
 function elog() {
 #	if ! [[ -v cccombo_breaker ]]; then
@@ -32,9 +34,16 @@ function elog() {
 #			edebug "${FUNCNAME[2]} called ${FUNCNAME[1]} and __L_O__ is '${__LOG_OPEN__}' & __L_L__ is '${__LOG_LEVEL__}' & __v__ is '${__verb__}' FUNCNAME is '${#FUNCNAME[@]}' long"
 #			edumpvar __LOG_OPEN__ __LOG_LEVEL__ __verb__
 #	fi
-	if [[ ${verbosity:-2} -ge ${__verb__} ]]; then
-		printf "${!1}%5s${_reset_}	%s\n" "$2" "$3" >&${__STOUTFD__}
+	if [[ ${FUNCNAME[1]} == "eprint" ]]; then
+		local fd=${__STOUTFD__}
+	else
+		local fd=${__STERRFD__}
 	fi
+
+	if [[ ${verbosity:-2} -ge ${__verb__} ]]; then
+		printf "${!1}%5s${_reset_}  %s\n" "$2" "$3" >&$fd
+	fi
+
 	if [[ -n ${__LOG_OPEN__} && ${__LOG_LEVEL__} -ge ${__verb__} ]]; then
 		printf "%(%Y-%m-%d %H:%M:%S)T  ${!1}%5s${_reset_}  %s\n" -1 "$2" "$3" >>"${__LOG__}"
 	fi
@@ -54,17 +63,28 @@ function dlog() {
 function __init_messages__() {
 	exec {__STOUTFD__}>&1
 	exec {__STERRFD__}>&2
-	while :; do
-		while getopts ':v:' opt; do
-			if [[ ${opt} == 'v' && ${OPTARG} =~ ^[0-4]$ ]]; then
-				export verbosity=${OPTARG}
-				break 2
-			fi
-		done
-		(( OPTIND++ ))
-		[[ $OPTIND -gt $# ]] && break
-	done
+	extract_verbosity "$@"
 	trap __end_messages__ EXIT
+}
+
+extract_verbosity() {
+    local arg
+    local -i next_positional=2
+    for arg in "$@"; do
+        case $arg in
+			-+([!-])*v|--verb)
+                if [[ -n ${!next_positional} && ${!next_positional} =~ ^[0-4]$ ]]; then
+                    export verbosity=${!next_positional}
+                    break
+                fi
+                ;;
+            -+([!-])*v[0-4]|--verb[0-4])
+                verbosity=${arg: -1}
+                break
+                ;;
+        esac
+        (( next_positional++))
+    done
 }
 
 function __open_logfile__() {
@@ -119,7 +139,7 @@ function __open_logfile__() {
 			fi
 
 			if [[ ${__LOG_LEVEL__} -ge 4 || ${verbosity} -ge 4 ]]; then
-					ls -Alh /proc/$$/fd | awk '{ print $(NF-2), $(NF-1), $NF}' | tail -n +2 > "${__STOUT_PIPE__}"
+				ls -Alh /proc/$$/fd | awk '{ print $(NF-2), $(NF-1), $NF}' | tail -n +2 >&2 # "${__STOUT_PIPE__}"
 			fi
 			trap __end_messages__ EXIT
 			edebug "Logging to '${__LOG__}'"
