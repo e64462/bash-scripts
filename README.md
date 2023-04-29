@@ -1,5 +1,7 @@
 ### **ABOUT**
-This program acts as a small wrapper around BORG Backup by managing the 'database' of filesystem endpoints specified in `/usr/local/etc/backUP/backup.txt`. backUP will process the endpoints specified there in one of two ways: 
+This program acts as a small wrapper around BORG Backup by managing the 'database' of filesystem endpoints specified in
+`/usr/local/etc/backUP/backup.txt`
+backUP will process the endpoints specified there in one of two ways: 
 1. Build the full parent directory structure of the endpoint
 2. If the endpoint is a directory, then also traverse it recursively
 
