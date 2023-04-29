@@ -24,10 +24,10 @@ All commands should be run as sudo
 
 `sudo borg init --encryption=repokey-blake2 /path/to/repo`
 
-2. Move`backUP` and `args2array` to `/usr/local/bin` (you'll need to edit backUP if you choose a different folder)
+2. Run the installer.
 ```
-sudo cp /path/to/backUP /usr/local/bin
-sudo cp /path/to/args2array /usr/local/bin
+cd bash-scripts
+sudo ./install
 ```
 3. That's it, you're done.
 
