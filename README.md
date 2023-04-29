@@ -19,7 +19,7 @@ Additional options are supported. See Usage below.
 
 ***
 ### INSTALLATION
-All commands should be run as sudo
+All commands should be run as root
 1. Initialize a BORG Backup Repository
 
 `sudo borg init --encryption=repokey-blake2 /path/to/repo`
@@ -67,14 +67,6 @@ BACKUP_DB = "/usr/local/etc/backUP/backup.txt"
 # USER = "some user"
 ```
 
-Set the permissions and ownership
-
-```
-sudo touch /usr/local/etc/backUP/backup.txt
-sudo chown root:root /etc/backUP.conf /etc/backup.txt /usr/local/bin/backUP /usr/local/bin/args2array
-sudo chmod o-w /etc/backUP.conf /etc/backup.txt /usr/local/bin/backUP /usr/local/bin/args2array
-sudo chmod o-r /etc/backUP.conf /etc/backup.txt
-```
 ***
 ### USAGE
 Type `backUP` in your shell for usage information
