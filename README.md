@@ -7,7 +7,7 @@ backUP will process the endpoints specified there in two ways:
 1. Build the full parent directory structure of each endpoint
 2. If the endpoint is a directory, then also traverse it recursively
 
-Calling `backUP -b` then uses this information to create a backup of the full directory tree, preserving all permissions, leading to each endpoint specified in `backup.txt`.
+Calling `backUP -b` will use this information to create a backup of the full directory tree, preserving all permissions, leading to each endpoint specified in `backup.txt`.
 
 Additional options are supported. See Usage information below.
 
