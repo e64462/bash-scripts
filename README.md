@@ -1,11 +1,15 @@
 ### **ABOUT**
 This program acts as a small wrapper around BORG Backup by managing the 'database' of filesystem endpoints specified in
+
 `/usr/local/etc/backUP/backup.txt`
-backUP will process the endpoints specified there in one of two ways: 
-1. Build the full parent directory structure of the endpoint
+
+backUP will process the endpoints specified there in two ways: 
+1. Build the full parent directory structure of each endpoint
 2. If the endpoint is a directory, then also traverse it recursively
 
 Calling `backUP -b` then uses this information to create a backup of the full directory tree, preserving all permissions, leading to each endpoint specified in `backup.txt`.
+
+Additional options are supported. See Usage information below.
 
 ***
 ### DEPENDENCIES (DEVELOPED WITH)
@@ -74,3 +78,24 @@ sudo chmod o-r /etc/backUP.conf /etc/backup.txt
 ***
 ### USAGE
 Type `backUP` in your shell for usage information
+
+```
+Usage:
+ backUP option [<path>]
+
+Options:
+     -a <path> : Add <path> to the 'database'
+     -b        : Backup all 'database' entries with BORG backup
+     -c        : Prune and then cleanup BORG backups
+ --conf <path> : Specify an alternate backUP config file to use
+ --dupe <path> : Duplicate to <path> ( No limit to number of calls )
+     -e        : Extract a BORG backup ( Defaults to ~/temp )
+ --dest <path> : Set extraction directory ( Only applies to -e flag )
+     -l        : List all BORG backups
+     -L        : List all paths monitored by backUP
+     -h        : Display usage information
+     -r <path> : Remove <path> from the 'database'
+     -s <name> : Search archives for <name>
+ --pass        : Prompts for the BORG Backup passphrase
+ --repo <path> : Sets the BORG repo to <path>
+ ```
