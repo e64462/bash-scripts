@@ -59,6 +59,7 @@ BACKUP_DB = "/etc/backup.txt"
 
 # System User, defaults to $SUDO_USER
 # USER = "some user"
+```
 
 Set the permissions and ownership
 
