@@ -33,7 +33,7 @@ sudo ./install
 
 ***
 ### CONFIGURATION
-Create a config file `/etc/backUP.conf` with your favorite editor, add these lines
+Create/Edit a config file `/usr/local/etc/backUP/backUP.conf` with your favorite editor, add these lines
 ```
 # Passphrase for BORG_REPO
 BORG_PASSPHRASE = "passphrase"
