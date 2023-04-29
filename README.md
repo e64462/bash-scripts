@@ -9,7 +9,7 @@ backUP will process the endpoints specified there in two ways:
 
 Calling `backUP -b` will use this information to create a backup of the full directory tree, preserving all permissions, leading to each endpoint specified in `backup.txt`.
 
-Additional options are supported. See Usage information below.
+Additional options are supported. See Usage below.
 
 ***
 ### DEPENDENCIES (DEVELOPED WITH)
@@ -33,16 +33,16 @@ sudo ./install
 
 ***
 ### CONFIGURATION
-Create/Edit a config file `/usr/local/etc/backUP/backUP.conf` with your favorite editor, add these lines
+Create/Edit a config file `/usr/local/etc/backUP/backUP.conf` with your favorite editor, add these lines (uncommented lines are mandatory)
 ```
 # Passphrase for BORG_REPO
 BORG_PASSPHRASE = "passphrase"
 
 # Absolute Path to BORG Repository
-BORG_REPO = "repo"
+BORG_REPO = "/path/to/repo"
 
 # Absolute Path to list of Backup Files, changing this requires editing backUP
-BACKUP_DB = "/etc/backup.txt"
+BACKUP_DB = "/usr/local/etc/backUP/backup.txt"
 
 # Absolute Path to the duplicate(s) of BORG_REPO
 # DUPLICATE_REPO_PATH = "path-1"
@@ -70,7 +70,7 @@ BACKUP_DB = "/etc/backup.txt"
 Set the permissions and ownership
 
 ```
-sudo touch /etc/backup.txt
+sudo touch /usr/local/etc/backUP/backup.txt
 sudo chown root:root /etc/backUP.conf /etc/backup.txt /usr/local/bin/backUP /usr/local/bin/args2array
 sudo chmod o-w /etc/backUP.conf /etc/backup.txt /usr/local/bin/backUP /usr/local/bin/args2array
 sudo chmod o-r /etc/backUP.conf /etc/backup.txt
