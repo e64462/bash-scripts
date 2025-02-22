@@ -16,7 +16,7 @@ LONG_OPTS='dest!,repo!,pass,dupe:,conf!'
 declare -a dupe_paths
 
 usage(){
->&2 cat << EOF
+cat << EOF
 License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
 
 This is free software; you are free to change and redistribute it.
@@ -205,10 +205,16 @@ recurse_directories() {
 }
 
 create_borg_backup() {
-	eprint "Creating new backup '$DATE' in '$BORG_REPO'"
+	eprint "Creating new backup 'files-$DATE' in '$BORG_REPO'"
 
 	{ parse_parents && recurse_directories; } | sort -u | \
-		borg create --paths-from-stdin "$BORG_REPO::$DATE" 
+		borg create --paths-from-stdin "$BORG_REPO::files-$DATE"
+
+	eprint "Creating new backup 'databases-$DATE' in '$BORG_REPO'"
+
+	borg create --stdin-name "databases-$DATE.sql" \
+		--files-cache disabled --content-from-command "$BORG_REPO::databases-$DATE" -- \
+		mysqldump --all-databases --source-data --single-transaction
 }
 
 list_borg_backups() {
@@ -298,7 +304,7 @@ duplicate_borg_repo() {
 	if validate_repo "$primary_repo"; then
 		if [[ ${#dupe_paths[@]} -gt 0 ]]; then
 			for secondary_repo in "${dupe_paths[@]}"; do
-				rsync -au --delete --timeout=1 "$primary_repo" "$secondary_repo"  > /dev/null
+				rsync -au --delete --timeout=5 "$primary_repo" "$secondary_repo"  > /dev/null
 				if [[ $? -ne 0 ]]; then
 					ewarn "rsync encountered an error duplicating '$primary_repo' to '$secondary_repo'"
 				else
@@ -334,6 +340,7 @@ print_database() {
 				printf "%-8s%-8s%s\n" "$counter" "$entry_type" "$line"
 			fi
 		done < "$BACKUP_DB"
+		printf "\n"
 }
 
 get_password() {
@@ -437,9 +444,9 @@ if [[ $? -ne 0 ]]; then
 fi
 
 borg -V > /dev/null 2>&1
-	borg_install_check=$?
+borg_install_check=$?
 { printf '%s\n%s' "$MIN_BORG_VER" "$(borg -V | awk '{print $NF}')" | sort -C -V; } > /dev/null 2>&1
-	borg_version_check=$?
+borg_version_check=$?
 
 if [[ $borg_install_check -ne 0 || $borg_version_check -ne 0 ]]; then
 	ecrit "$FILENAME depends on BORG Backup v${MIN_BORG_VER}+. Your system is configured with"

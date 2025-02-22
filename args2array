@@ -101,7 +101,7 @@ args2array() {
 		etrace "first positional is '$1'"
 		if [[ ${1:0:1} == "-" ]]; then
 			# we're working with an option
-			if	[[ ! "${1:1:1}" == "-" && ${#1} > 2 ]]; then
+			if [[ ! "${1:1:1}" == "-" && ${#1} > 2 ]]; then
 			# interpret parameter as concatenated
 				expand_options __temp "${1//-/}"
 				shift
