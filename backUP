@@ -9,6 +9,8 @@ MIN_BORG_VER='1.2.3'
 MIN_COREUTIL_VER='7.0'
 DATE="$(date +%m-%d-%Y-%I:%M:%S-%p)"
 FILENAME="$(basename $0)"
+FILES_PREFIX='files-'
+DB_PREFIX='databases-'
 IS_NUM_REGEX='^[1-9][0-9]*$'
 REPO_STR='This is a Borg Backup repository.'
 SMOL_OPTS='a:e!r:hblLcs!v!'
@@ -208,12 +210,12 @@ create_borg_backup() {
 	eprint "Creating new backup 'files-$DATE' in '$BORG_REPO'"
 
 	{ parse_parents && recurse_directories; } | sort -u | \
-		borg create --paths-from-stdin "$BORG_REPO::files-$DATE"
+		borg create --paths-from-stdin "$BORG_REPO::${FILES_PREFIX}${DATE}"
 
 	eprint "Creating new backup 'databases-$DATE' in '$BORG_REPO'"
 
-	borg create --stdin-name "databases-$DATE.sql" \
-		--files-cache disabled --content-from-command "$BORG_REPO::databases-$DATE" -- \
+	borg create --stdin-name "${DB_PREFIX}${DATE}.sql" \
+		--files-cache disabled --content-from-command "$BORG_REPO::${DB_PREFIX}${DATE}" -- \
 		mysqldump --all-databases --source-data --single-transaction
 }
 
@@ -294,8 +296,13 @@ search() {
 }
 
 borg_compact_and_prune() {
-	borg prune --list --keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO"		
-	borg compact "$BORG_REPO" 
+	borg prune --glob-archives="${FILES_PREFIX}*" --list \
+		--keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO"
+
+	borg prune --glob-archives="${DB_PREFIX}*" --list \
+		--keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO"
+
+	borg compact "$BORG_REPO"
 }
 
 duplicate_borg_repo() {
