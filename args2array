@@ -71,24 +71,20 @@ expand_options() {
 	local cmpd="$2"
 	cmpd="${cmpd//-/}"
 	_opts=()
-	local i _ctr=0
+	local i
 
 	for (( i = 0; i < ${#cmpd}; i++ )); do
 		validate_option "${cmpd:$i:1}"
 		case "$?" in
-			0 | 1 ) _opts+=("-${cmpd:$i:1}")
-					(( _ctr++ ))
+			0 | 1 ) _opts+=("-${cmpd:i:1}" "${cmpd:i+1}")
+					return 0
 					;;
-			2 ) _opts=("-${cmpd:$i:1}" "${_opts[@]}")
+			2 ) _opts=("-${cmpd:i:1}" "${_opts[@]}")
 				;;
-			3 ) ecrit "option '-${cmpd:$i:1}' is invalid."
+			3 ) ecrit "option '-${cmpd:i:1}' is invalid."
 				exit 3
 				;;
 		esac
-		if [[ $_ctr -gt 1 ]]; then
-			ecrit "Two or more options '-${cmpd}' require an argument."
-			exit 5
-		fi
 	done
 }
 

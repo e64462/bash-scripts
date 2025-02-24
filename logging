@@ -73,14 +73,14 @@ extract_verbosity() {
 	local rtn=0
     for arg in "$@"; do
         case $arg in
-			-+([!-])*v|--verb)
+			-!(-)*v|--verb)
                 if [[ -n ${!next_positional} && ${!next_positional} =~ ^[0-4]$ ]]; then
                     export verbosity=${!next_positional}
 					rtn=2
                     break
                 fi
                 ;;
-            -+([!-])*v[0-4]|--verb[0-4])
+            -!(-)*v[0-4]|--verb[0-4])
                 export verbosity=${arg: -1}
 				rtn=1
                 break
