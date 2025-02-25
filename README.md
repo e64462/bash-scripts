@@ -37,7 +37,7 @@ sudo ./install
 0 0 1 1 * /usr/local/bin/backUP -c  # Yearly pruning / compacting
 ```
 
-3. That's it, you're done.
+4. That's it, you're done.
 
 ***
 ### CONFIGURATION
