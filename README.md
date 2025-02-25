@@ -7,7 +7,7 @@ backUP will process the endpoints specified there in two ways:
 1. Build the full parent directory structure of each endpoint
 2. If the endpoint is a directory, then also traverse it recursively
 
-Calling `backUP -b` uses this information to create a backup of the full directory tree leading to each endpoint specified in `backup.txt`, preserving all permissions. It will also use `mysqldump` to create a backup in the BORG repository containing all databases.
+Calling `backUP -b` uses this information to create a backup of the full directory tree leading to each endpoint specified in `backup.txt`, preserving all path/folder/endpoint permissions. It will also use `mysqldump` to create a backup in the BORG repository containing all databases.
 
 Additional options are supported. See Usage below.
 
