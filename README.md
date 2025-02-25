@@ -1,5 +1,5 @@
 ### **ABOUT**
-This program acts as a small wrapper around BORG Backup by managing the 'database' of filesystem endpoints specified in
+This program acts as a small wrapper around BORG Backup by managing a 'database' of filesystem endpoints specified in
 
 `/usr/local/etc/backUP/backup.txt`
 
@@ -7,7 +7,7 @@ backUP will process the endpoints specified there in two ways:
 1. Build the full parent directory structure of each endpoint
 2. If the endpoint is a directory, then also traverse it recursively
 
-Calling `backUP -b` will use this information to create a backup of the full directory tree, preserving all permissions, leading to each endpoint specified in `backup.txt`.
+Calling `backUP -b` uses this information to create a backup of the full directory tree, preserving all permissions, leading to each endpoint specified in `backup.txt`. It will also use `mysqldump` to create a backup in the BORG repository containing all databases.
 
 Additional options are supported. See Usage below.
 
@@ -16,6 +16,7 @@ Additional options are supported. See Usage below.
 1. Ubuntu v20.04+      - The code assumes the value of `$SUDO_USER` -- so any Debian based distro might work
 2. BORG Backup v1.2.3+ - For performing the backups
 3. Bash v4+            - For associative arrays
+4. MySQL v8+           - Only version tested
 
 ***
 ### INSTALLATION
@@ -91,3 +92,8 @@ Options:
  --pass        : Prompts for the BORG Backup passphrase
  --repo <path> : Sets the BORG repo to <path>
  ```
+Type `sudo crontab -e` in your shell and add the following lines to automate backups
+```
+1 2 * * * /usr/local/bin/backUP -b  # Nightly backups at 2:00 AM
+0 0 1 1 * /usr/local/bin/backUP -c  # Yearly pruning / compacting
+```
