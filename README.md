@@ -23,7 +23,7 @@ Additional options are supported. See Usage below.
 All commands should be run as root
 1. Initialize a BORG Backup Repository
 
-`sudo borg init --encryption=repokey-blake2 /path/to/repo`
+`borg init --encryption=repokey-blake2 /path/to/repo`
 
 2. Run the installer.
 ```
@@ -31,7 +31,7 @@ cd bash-scripts
 sudo ./install
 ```
 
-3. (Optional) Add crontab entries by typing `sudo crontab -e` in your shell and add the following lines to automate backups
+3. (Optional) Add crontab entries by typing `crontab -e` in your shell and add the following lines to automate backups
 ```
 1 2 * * * /usr/local/bin/backUP -b  # Nightly backups at 2:00 AM
 0 0 1 1 * /usr/local/bin/backUP -c  # Yearly pruning / compacting
