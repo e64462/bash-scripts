@@ -80,7 +80,7 @@ extract_verbosity() {
                     break
                 fi
                 ;;
-            -!(-)*v[0-4]|--verb[0-4])
+            -!(-)*v[0-4]|--verb=[0-4])
                 export verbosity=${arg: -1}
 				rtn=1
                 break

@@ -91,7 +91,7 @@ expand_options() {
 args2array() {
 	declare -n __arr=$1 && shift
 	
-	local __exitcode __ctr=0 __i __exitcode __opt
+	local __exitcode __ctr=0 __i __exitcode __opt __temp
 
 	while (( $# > 0 )); do	
 		etrace "first positional is '$1'"
@@ -103,6 +103,10 @@ args2array() {
 				shift
 				set -- "${__temp[@]}" "$@"
 				continue
+			elif [[ "${1:0:2}" == "--" && -n "${1//[^=]/}" ]]; then
+				__temp="$1"
+				shift
+				set -- "${__temp%=*}" "${__temp#*=}" "$@"
 			fi
 			__opt=${1//-/}
 			if [[ ${#__opt} -gt 1 ]]; then
@@ -120,6 +124,7 @@ args2array() {
 				__ctr=0
 				edumpvar __opt __arr[$__opt]
 				if [[ $__exitcode -eq 0 ]]; then
+					# option requires one or more arguments
 					for __i in "${@:2}"; do
 						if [[ ${__i:0:1} == "-" ]]; then
 							break
