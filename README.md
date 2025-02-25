@@ -31,7 +31,7 @@ cd bash-scripts
 sudo ./install
 ```
 
-3. (Optional) Add crontab entries by typing `crontab -e` in your shell and add the following lines to automate backups
+3. (Optional) Create crontab entries by typing `crontab -e` in your shell and add the following lines to automate backups
 ```
 1 2 * * * /usr/local/bin/backUP -b  # Nightly backups at 2:00 AM
 0 0 1 1 * /usr/local/bin/backUP -c  # Yearly pruning / compacting
