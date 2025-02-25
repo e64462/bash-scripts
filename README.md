@@ -30,6 +30,13 @@ All commands should be run as root
 cd bash-scripts
 sudo ./install
 ```
+
+3. (Optional) Add crontab entries by typing `sudo crontab -e` in your shell and add the following lines to automate backups
+```
+1 2 * * * /usr/local/bin/backUP -b  # Nightly backups at 2:00 AM
+0 0 1 1 * /usr/local/bin/backUP -c  # Yearly pruning / compacting
+```
+
 3. That's it, you're done.
 
 ***
@@ -92,8 +99,3 @@ Options:
  --pass        : Prompts for the BORG Backup passphrase
  --repo <path> : Sets the BORG repo to <path>
  ```
-Type `sudo crontab -e` in your shell and add the following lines to automate backups
-```
-1 2 * * * /usr/local/bin/backUP -b  # Nightly backups at 2:00 AM
-0 0 1 1 * /usr/local/bin/backUP -c  # Yearly pruning / compacting
-```
