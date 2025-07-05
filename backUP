@@ -14,7 +14,7 @@ DB_PREFIX='databases-'
 IS_NUM_REGEX='^[1-9][0-9]*$'
 REPO_STR='This is a Borg Backup repository.'
 SMOL_OPTS='a:e!r:hblLcs!v!'
-LONG_OPTS='dest!,repo!,pass,dupe:,conf!'
+LONG_OPTS='dest!,pass,conf!,verb!'
 declare -a dupe_paths
 
 usage(){
@@ -36,7 +36,6 @@ Options:
      -b        : Backup all 'database' entries with BORG backup
      -c        : Prune and then cleanup BORG backups
  --conf <path> : Specify an alternate $FILENAME config file to use
- --dupe <path> : Duplicate to <path> ( No limit to number of calls )
      -e        : Extract a BORG backup ( Defaults to ~/temp )
  --dest <path> : Set extraction directory ( Only applies to -e flag )
      -l        : List all BORG backups
@@ -45,7 +44,6 @@ Options:
      -r <path> : Remove <path> from the 'database'
      -s <name> : Search archives for <name>
  --pass        : Prompts for the BORG Backup passphrase
- --repo <path> : Sets the BORG repo to <path>
 
 Configuration options are loaded from '$CONFIGURATION_FILE'
 
@@ -57,74 +55,119 @@ exit 1
 }
 
 parse_config() {
-	# don't allow multiple configuration files to pollute each other
-	unset __LOG_STOUT__ __LOG_LEVEL__ __LOGPATH__ BORG_PASSPHRASE 
-	unset BORG_REPO BACKUP_DB SOME_USER EXTRACT_TO dupe_paths
-	export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
-	local -A config verb
+    export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
 
-	config=(
-		[BORG_PASSPHRASE]=""
-		[BORG_REPO]=""
-		[BACKUP_DB]=""
-		[SOME_USER]="$SUDO_USER"
-		[EXTRACT_TO]=""
-	)
-	verb=( [STOUT]=0 [CRIT]=1 [ERROR]=2	[DEBUG]=3 [TRACE]=4	)
+    local -A config verb dupe_index_by_key
+    config=(
+        [BORG_PASSPHRASE]=""
+        [BORG_REPO]=""
+        [BACKUP_DB]=""
+        [SOME_USER]="$SUDO_USER"
+        [EXTRACT_TO]=""
+		[DB]="0"
+    )
+    verb=( [STOUT]=0 [CRIT]=1 [ERROR]=2 [DEBUG]=3 [TRACE]=4 )
 
-	while read line; do
-		# skip processing lines that begin with '#'
-		[[ "$line" =~ ^#.*$ ]] && continue
-		
-		if echo "$line" | grep -F = &>/dev/null; then
-			grab_key "$line" varname
-			grab_value "$line" value
-			edumpvar varname value
-			case "$varname" in
-				DUPLICATE_REPO_PATH )
-					tval="$(realpath -mq "$value")"
-					validate_duplicate "$tval" && dupe_paths+=("$tval")
-					;;
-				BORG_REPO )
-					validate_repo "$value" && config["$varname"]="$value"
-					;;
-				* )
-					config["$varname"]="$value"
-					;;
-			esac
-		fi
+    # Arrays to be filled during parsing
+    dupe_paths=()
+    dupe_ips=()
+    dupe_macs=()
 
-	done < "$CONFIGURATION_FILE"
+    while read -r line; do
+        [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+        if echo "$line" | grep -F = &>/dev/null; then
+            grab_key "$line" varname
+            grab_value "$line" value
+            edumpvar varname value
 
-	if [[ "${config[LOGSTOUT]}" == "true" || "${config[LOGSTOUT]}" == "1"  ]]; then
-		export __LOG_STOUT__=1
-	fi
+            case "$varname" in
+                DUPE_REPO_PATH* )
+                    suffix="${varname#DUPE_REPO_PATH}"
+                    key="${suffix:-__default__}"
+                    index="${#dupe_paths[@]}"
+                    dupe_paths+=("$(realpath -mq "$value")")
+                    dupe_ips+=("")  # default
+                    dupe_macs+=("") # default
+                    dupe_index_by_key["$key"]="$index"
+                    ;;
+                DUPE_REPO_IP* )
+                    suffix="${varname#DUPE_REPO_IP}"
+                    key="${suffix:-__default__}"
+                    if [[ -z "${dupe_index_by_key[$key]+_}" ]]; then
+                        ecrit "Malformed config: DUPE_REPO_IP$key appears before DUPE_REPO_PATH$key"
+                        exit 1
+                    fi
+                    idx="${dupe_index_by_key[$key]}"
+                    if [[ -n "${dupe_ips[$idx]}" ]]; then
+                        ecrit "Malformed config: DUPE_REPO_IP$key redefined."
+                        exit 1
+                    fi
+                    dupe_ips[$idx]="$value"
+                    ;;
+                DUPE_REPO_MAC* )
+                    suffix="${varname#DUPE_REPO_MAC}"
+                    key="${suffix:-__default__}"
+                    if [[ -z "${dupe_index_by_key[$key]+_}" ]]; then
+                        ecrit "Malformed config: DUPE_REPO_MAC$key appears before DUPE_REPO_PATH$key"
+                        exit 1
+                    fi
+                    idx="${dupe_index_by_key[$key]}"
+                    if [[ -n "${dupe_macs[$idx]}" ]]; then
+                        ecrit "Malformed config: DUPE_REPO_MAC$key redefined."
+                        exit 1
+                    fi
+                    dupe_macs[$idx]="$value"
+                    ;;
+                BORG_REPO )
+                    config["$varname"]="$value"
+                    ;;
+                * )
+                    config["$varname"]="$value"
+                    ;;
+            esac
+        fi
+    done < "$CONFIGURATION_FILE"
 
-	if [[ "${config[LOGSTERR]}" == "true" || "${config[LOGSTERR]}" == "1" ]]; then
-		export __LOG_STERR__=1
-	fi
+    # Logging options & flags
+    [[ "${config[LOGSTOUT]}" =~ ^(true|1)$ ]] && export __LOG_STOUT__=1
+    [[ "${config[LOGSTERR]}" =~ ^(true|1)$ ]] && export __LOG_STERR__=1
+	[[ "${config[DB]}" =~ ^(true|1)$ ]] && export DB=1
 
-	if [[ -n "${config[LOGLEVEL]}" ]]; then
-		if [[ "${verb[${config[LOGLEVEL]}]+1}" ]]; then
-			export __LOG_LEVEL__=${verb[${config[LOGLEVEL]}]}
-		else
-			ewarn "$FILENAME does not recognize configuration option LOGLEVEL = ${config[LOGLEVEL]}"
-		fi
-	fi
-	if [[ -n "${config[LOGPATH]}" ]]; then
-		export __LOGPATH__="${config[LOGPATH]}"
-		__open_logfile__
-	fi
+    if [[ -n "${config[LOGLEVEL]}" ]]; then
+        if [[ "${verb[${config[LOGLEVEL]}]+_}" ]]; then
+            export __LOG_LEVEL__="${verb[${config[LOGLEVEL]}]}"
+        else
+            ewarn "$FILENAME does not recognize configuration option LOGLEVEL = ${config[LOGLEVEL]}"
+        fi
+    fi
 
-	export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
-	export BORG_REPO="${config[BORG_REPO]}"
-	export BACKUP_DB="${config[BACKUP_DB]}"
-	export SOME_USER="${config[SOME_USER]}"
-	
-	if [[ -z "${config[EXTRACT_TO]}" ]]; then
-		export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
+    if [[ -n "${config[LOGPATH]}" ]]; then
+        export __LOGPATH__="${config[LOGPATH]}"
+        __open_logfile__
+    fi
+
+    # Core config exports
+    export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
+    export BORG_REPO="${config[BORG_REPO]}"
+    export BACKUP_DB="${config[BACKUP_DB]}"
+    export SOME_USER="${config[SOME_USER]}"
+    export BORG_REPO_IP="${config[BORG_REPO_IP]}"
+    export BORG_REPO_MAC="${config[BORG_REPO_MAC]}"
+
+    if [[ -z "${config[EXTRACT_TO]}" ]]; then
+        export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
+    else
+        export EXTRACT_TO="${config[EXTRACT_TO]}"
+    fi
+
+	if [[ -n "$BORG_REPO" ]]; then
+	    validate_repo "$BORG_REPO" "$BORG_REPO_IP" "$BORG_REPO_MAC" || {
+	        ecrit "Validation failed for BORG_REPO '$BORG_REPO'. Aborting."
+	        exit 1
+	    }
 	else
-		export EXTRACT_TO="${config[EXTRACT_TO]}"
+	    ecrit "No BORG_REPO defined in configuration. Aborting."
+	    exit 1
 	fi
 }
 
@@ -212,6 +255,8 @@ create_borg_backup() {
 	{ parse_parents && recurse_directories; } | sort -u | \
 		borg create --paths-from-stdin "$BORG_REPO::${FILES_PREFIX}${DATE}"
 
+	(( ! DB )) && return 0
+	
 	eprint "Creating new backup 'databases-$DATE' in '$BORG_REPO'"
 
 	borg create --stdin-name "${DB_PREFIX}${DATE}.sql" \
@@ -310,19 +355,24 @@ duplicate_borg_repo() {
 
 	if validate_repo "$primary_repo"; then
 		if [[ ${#dupe_paths[@]} -gt 0 ]]; then
-			for secondary_repo in "${dupe_paths[@]}"; do
-				rsync -au --delete --timeout=5 "$primary_repo" "$secondary_repo"  > /dev/null
-				if [[ $? -ne 0 ]]; then
-					ewarn "rsync encountered an error duplicating '$primary_repo' to '$secondary_repo'"
+			local i
+			for i in "${!dupe_paths[@]}"; do
+				if validate_duplicate "${dupe_paths[$i]}" "${dupe_ips[$i]}" "${dupe_macs[$i]}"; then
+					rsync -au --delete --timeout=5 "$primary_repo" "${dupe_paths[$i]}"  > /dev/null
+					if [[ $? -ne 0 ]]; then
+						ewarn "rsync encountered an error duplicating '$primary_repo' to '${dupe_paths[$i]}'"
+					else
+						edebug "Successfully duplicated to '${dupe_paths[$i]}'"
+					fi
 				else
-					edebug "Successfully duplicated to '$secondary_repo'"
+					ewarn "'${dupe_paths[$i]}' is not a valid duplication endpoint. Skipping."
 				fi
 			done
 		else
-			ewarn "No duplication paths specified. '$primary_repo' will not be duplicated"
+			ewarn "No duplication paths specified. '$primary_repo' will not be duplicated."
 		fi
 	else
-		ecrit "BORG repo '$primary_repo' is not valid. This shouldn't have happened"
+		ecrit "BORG repo '$primary_repo' is not valid. This shouldn't have happened."
 		exit 1
 	fi
 }
@@ -372,44 +422,113 @@ get_password() {
 }
 
 validate_repo() {
-	if ! [[ -f "${1}/README" && "$(head -n 1 "${1}/README")" == "$REPO_STR" ]]; then
-		# according to https://borgbackup.readthedocs.io/en/stable/internals/data-structures.html#repository
-		# all BORG repositories contain a "README" file with the string "This is a Borg Backup repository."
-		ecrit "The path, '$1' does not contain a valid BORG repository. Exiting."
-		exit 2
-	else
-		return 0
-	fi
+    local path="$1"
+    local ip="${2:-$BORG_REPO_IP}"
+    local mac="${3:-$BORG_REPO_MAC}"
+    prepare_mount_path "$path" "$ip" "$mac" true
 }
 
 validate_duplicate() {
-	# Duplication is performed with rsync --delete so anything in the destination will be wiped
-	# This script runs as root and we don't want to accidentally erase any important directories!
+    local path="$1"
+    local ip="$2"
+    local mac="$3"
 
-	local duplicate_repo_path="$1"
+    if [[ ! -d "$path" ]]; then
+        ewarn "Duplication path '$path' is not a valid directory and will be skipped."
+        return 1
+    fi
 
-	if [[ ! -d "$duplicate_repo_path" ]]; then
-		# argument is not a valid directory
-		ewarn "Duplication path '$duplicate_repo_path' is not a valid directory and will be skipped."
-		return 1
-	elif awk '$1 !~ /^#/ && $2 ~ /^[/]/ {print $2}' /etc/fstab | grep -Fxq "$duplicate_repo_path"; then
-		# mountpoint command provided by util-linux - checks if duplicate_repo_path is mounted
-		if ! mountpoint -q "$duplicate_repo_path"; then
-			ewarn "'$duplicate_repo_path' isn't mounted and will be skipped."
-			return 1
-		fi
-	elif [[ $(ls -A "$duplicate_repo_path" | wc -l) -eq 0 ]]; then
-		# empty directories are OK
-		return 0
-	elif [[ -f "${duplicate_repo_path}/README" && "$(head -n 1 "${duplicate_repo_path}/README")" == "$REPO_STR" ]]; then
-		# according to https://borgbackup.readthedocs.io/en/stable/internals/data-structures.html#repository
-		# all BORG repositories contain a "README" file with the string "This is a Borg Backup repository."
-		return 0
-	else
-		# duplication directory is probably not a BORG repo, and we don't want to delete everything inside of it
-		ewarn "Duplication path '$duplicate_repo_path' is either non-empty or not a BORG repo and will be skipped."
-		return 1
-	fi
+    prepare_mount_path "$path" "$ip" "$mac" false || return 1
+
+    if [[ $(ls -A "$path" | wc -l) -eq 0 ]]; then
+        return 0
+    elif [[ -f "$path/README" && "$(head -n 1 "$path/README")" == "$REPO_STR" ]]; then
+        return 0
+    else
+        ewarn "Duplication path '$path' is either non-empty or not a BORG repo and will be skipped."
+        return 1
+    fi
+}
+
+prepare_mount_path() {
+    local path="$1"
+    local ip="$2"
+    local mac="$3"
+    local require_borg_repo="${4:-false}"
+
+    # Check if this path is listed in fstab
+    if awk -v p="$path" '$1 !~ /^#/ && $2 == p { found = 1 } END { exit !found }' /etc/fstab; then
+        local fstype
+        fstype=$(awk -v p="$path" '$1 !~ /^#/ && $2 == p { print $3; exit }' /etc/fstab)
+
+        if [[ "$fstype" == "cifs" ]]; then
+            if [[ -n "$ip" && -n "$mac" ]]; then
+                wake_and_mount "$mac" "$ip" "$path" "$require_borg_repo" || return 1
+            else
+                ewarn "Missing IP or MAC for CIFS mount '$path'"
+                [[ "$require_borg_repo" == "true" ]] && exit 1 || return 1
+            fi
+        fi
+
+        if ! mountpoint -q "$path"; then
+            ewarn "'$path' is listed in fstab but not mounted."
+            [[ "$require_borg_repo" == "true" ]] && exit 1 || return 1
+        fi
+    fi
+
+    if [[ "$require_borg_repo" == "true" ]]; then
+        if ! [[ -f "$path/README" && "$(head -n 1 "$path/README")" == "$REPO_STR" ]]; then
+            ecrit "The path '$path' does not contain a valid BORG repository."
+            exit 2
+        fi
+    fi
+
+    return 0
+}
+
+wake_and_mount() {
+    local target_mac="$1"
+    local target_host="$2"
+    local mount_point="$3"
+    local exit_on_failure="${4:-false}"  # whether to exit or return on failure
+    local timeout=30
+    local elapsed=0
+
+    edebug "Sending Wake-on-LAN packet to $target_mac..."
+    if ! wakeonlan "$target_mac" > /dev/null; then
+        ewarn "Failed to send WOL packet to $target_mac"
+        [[ "$exit_on_failure" == "true" ]] && exit 1 || return 1
+    fi
+
+    edebug "Waiting for host $target_host to respond to ping..."
+    while ! ping -c 1 -W 1 "$target_host" &>/dev/null; do
+        (( elapsed++ >= timeout )) && {
+            ecrit "Ping timeout while waiting for $target_host"
+            [[ "$exit_on_failure" == "true" ]] && exit 2 || return 2
+        }
+        sleep 1
+    done
+
+    edebug "Waiting for SMB (port 445) on $target_host..."
+    while ! nc -w 1 -z "$target_host" 445 &>/dev/null; do
+        (( elapsed++ >= timeout )) && {
+            ecrit "SMB port timeout on $target_host"
+            [[ "$exit_on_failure" == "true" ]] && exit 3 || return 3
+        }
+        sleep 1
+    done
+
+    if ! mountpoint -q "$mount_point"; then
+        edebug "Attempting to mount $mount_point..."
+        if ! mount "$mount_point"; then
+            ecrit "Failed to mount $mount_point"
+            [[ "$exit_on_failure" == "true" ]] && exit 4 || return 4
+        fi
+    else
+        edebug "$mount_point is already mounted."
+    fi
+
+    return 0
 }
 
 grab_key() {
@@ -471,7 +590,6 @@ if [[ $EUID -ne 0 ]]; then
 	exit 1
 fi
 
-parse_config
 declare -A ARGS
 args2array ARGS "$@"
 
@@ -479,15 +597,15 @@ for arg in "${!ARGS[@]}"; do
 	case "$arg" in
 		a ) unpack_args ADD_ARGS "${ARGS[a]}"
 			;;
-		repo )
-			REPO_ARG="$(readlink -e "${ARGS[repo]}")"
-			;;
-		dupe ) unpack_args dupes "${ARGS[dupe]}"
-			for i in "${dupes[@]}"; do
-				tval="$(realpath -mq "$i")"
-				validate_duplicate "$tval" && dupe_paths+=("$tval")
-			done
-			;;
+#		repo )
+#			REPO_ARG="$(readlink -e "${ARGS[repo]}")"
+#			;;
+#		dupe ) unpack_args dupes "${ARGS[dupe]}"
+#			for i in "${dupes[@]}"; do
+#				tval="$(realpath -mq "$i")"
+#				validate_duplicate "$tval" && dupe_paths+=("$tval")
+#			done
+#			;;
 		conf )
 			CONF_ARG="$(realpath -mq "${ARGS[conf]}")"
 			;;
@@ -500,8 +618,9 @@ if [[ -v ARGS[h] ]]; then
 	usage
 	exit 0
 else
-	[[ -v ARGS[conf] ]] && CONFIGURATION_FILE="$CONF_ARG" && parse_config
-	[[ -v ARGS[repo] ]] && validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
+	[[ -v ARGS[conf] ]] && CONFIGURATION_FILE="$CONF_ARG"
+	parse_config
+#	[[ -v ARGS[repo] ]] && validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
 	[[ -v ARGS[pass] ]] && get_password
 	[[ -v ARGS[dest] ]] && export EXTRACT_TO="${ARGS[dest]}"
 	[[ -v ARGS[r] ]] && remove_from_backup_list "${REM_ARGS[@]}"
