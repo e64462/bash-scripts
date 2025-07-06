@@ -3,6 +3,8 @@
 source /usr/local/lib/backUP/logging
 source /usr/local/lib/backUP/args2array
 
+shopt -s extglob
+
 CONFIGURATION_FILE='/usr/local/etc/backUP/backUP.conf'
 MIN_BASH_VER='4.0'
 MIN_BORG_VER='1.2.3'
@@ -28,9 +30,9 @@ This program is used to manage the backup 'database' defined in '$CONFIGURATION_
 
 It is probably inefficient, buggy, and prone to explode or worse.
 
-Usage: 
+Usage:
  $FILENAME option [<path>]
- 
+
 Options:
      -a <path> : Add <path> to the 'database'
      -b        : Backup all 'database' entries with BORG backup
@@ -55,125 +57,134 @@ exit 1
 }
 
 parse_config() {
-    export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
+	export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
 
-    local -A config verb dupe_index_by_key
-    config=(
-        [BORG_PASSPHRASE]=""
-        [BORG_REPO]=""
-        [BACKUP_DB]=""
-        [SOME_USER]="$SUDO_USER"
-        [EXTRACT_TO]=""
+	local -A config verb dupe_index_by_key
+	config=(
+		[BORG_PASSPHRASE]=""
+		[BORG_REPO]=""
+		[BACKUP_DB]=""
+		[SOME_USER]="$SUDO_USER"
+		[EXTRACT_TO]=""
 		[DB]="0"
-    )
-    verb=( [STOUT]=0 [CRIT]=1 [ERROR]=2 [DEBUG]=3 [TRACE]=4 )
+	)
+	verb=( [STOUT]=0 [CRIT]=1 [ERROR]=2 [DEBUG]=3 [TRACE]=4 )
 
-    # Arrays to be filled during parsing
-    dupe_paths=()
-    dupe_ips=()
-    dupe_macs=()
+	# Arrays for duplicate repo targets
+	dupe_paths=()
+	dupe_ips=()
+	dupe_macs=()
 
-    while read -r line; do
-        [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
-        if echo "$line" | grep -F = &>/dev/null; then
-            grab_key "$line" varname
-            grab_value "$line" value
-            edumpvar varname value
+	while read -r line; do
+		[[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+		if echo "$line" | grep -F = &>/dev/null; then
+			grab_key "$line" varname
+			grab_value "$line" value
+			edumpvar varname value
 
-            case "$varname" in
-                DUPE_REPO_PATH* )
-                    suffix="${varname#DUPE_REPO_PATH}"
-                    key="${suffix:-__default__}"
-                    index="${#dupe_paths[@]}"
-                    dupe_paths+=("$(realpath -mq "$value")")
-                    dupe_ips+=("")  # default
-                    dupe_macs+=("") # default
-                    dupe_index_by_key["$key"]="$index"
-                    ;;
-                DUPE_REPO_IP* )
-                    suffix="${varname#DUPE_REPO_IP}"
-                    key="${suffix:-__default__}"
-                    if [[ -z "${dupe_index_by_key[$key]+_}" ]]; then
-                        ecrit "Malformed config: DUPE_REPO_IP$key appears before DUPE_REPO_PATH$key"
-                        exit 1
-                    fi
-                    idx="${dupe_index_by_key[$key]}"
-                    if [[ -n "${dupe_ips[$idx]}" ]]; then
-                        ecrit "Malformed config: DUPE_REPO_IP$key redefined."
-                        exit 1
-                    fi
-                    dupe_ips[$idx]="$value"
-                    ;;
-                DUPE_REPO_MAC* )
-                    suffix="${varname#DUPE_REPO_MAC}"
-                    key="${suffix:-__default__}"
-                    if [[ -z "${dupe_index_by_key[$key]+_}" ]]; then
-                        ecrit "Malformed config: DUPE_REPO_MAC$key appears before DUPE_REPO_PATH$key"
-                        exit 1
-                    fi
-                    idx="${dupe_index_by_key[$key]}"
-                    if [[ -n "${dupe_macs[$idx]}" ]]; then
-                        ecrit "Malformed config: DUPE_REPO_MAC$key redefined."
-                        exit 1
-                    fi
-                    dupe_macs[$idx]="$value"
-                    ;;
-                BORG_REPO )
-                    config["$varname"]="$value"
-                    ;;
-                * )
-                    config["$varname"]="$value"
-                    ;;
-            esac
-        fi
-    done < "$CONFIGURATION_FILE"
+			case "$varname" in
+				DUPE_REPO_PATH )
+					key="__default__${#dupe_paths[@]}"
+					index="${#dupe_paths[@]}"
+					dupe_paths+=("${value%%+(/)}")
+					dupe_ips+=("")
+					dupe_macs+=("")
+					dupe_index_by_key["$key"]="$index"
+					;;
+				DUPE_REPO_PATH_* )
+					suffix="${varname#DUPE_REPO_PATH_}"
+					key="$suffix"
+					index="${#dupe_paths[@]}"
+					dupe_paths+=("${value%%+(/)}")
+					dupe_ips+=("")
+					dupe_macs+=("")
+					dupe_index_by_key["$key"]="$index"
+					;;
+				DUPE_REPO_IP_* )
+					suffix="${varname#DUPE_REPO_IP_}"
+					key="$suffix"
+					if [[ -z "${dupe_index_by_key[$key]+_}" ]]; then
+						ecrit "Malformed config: DUPE_REPO_IP_$suffix appears before DUPE_REPO_PATH_$suffix"
+						exit 1
+					fi
+					idx="${dupe_index_by_key[$key]}"
+					if [[ -n "${dupe_ips[$idx]}" ]]; then
+						ecrit "Malformed config: DUPE_REPO_IP_$suffix redefined."
+						exit 1
+					fi
+					dupe_ips[$idx]="$value"
+					;;
+				DUPE_REPO_MAC_* )
+					suffix="${varname#DUPE_REPO_MAC_}"
+					key="$suffix"
+					if [[ -z "${dupe_index_by_key[$key]+_}" ]]; then
+						ecrit "Malformed config: DUPE_REPO_MAC_$suffix appears before DUPE_REPO_PATH_$suffix"
+						exit 1
+					fi
+					idx="${dupe_index_by_key[$key]}"
+					if [[ -n "${dupe_macs[$idx]}" ]]; then
+						ecrit "Malformed config: DUPE_REPO_MAC_$suffix redefined."
+						exit 1
+					fi
+					dupe_macs[$idx]="$value"
+					;;
+				BORG_REPO )
+					config["$varname"]="${value%%+(/)}"
+					;;
+				* )
+					config["$varname"]="$value"
+					;;
+			esac
+		fi
+	done < "$CONFIGURATION_FILE"
 
-    # Logging options & flags
-    [[ "${config[LOGSTOUT]}" =~ ^(true|1)$ ]] && export __LOG_STOUT__=1
-    [[ "${config[LOGSTERR]}" =~ ^(true|1)$ ]] && export __LOG_STERR__=1
+	# Logging options & flags
+	[[ "${config[LOGSTOUT]}" =~ ^(true|1)$ ]] && export __LOG_STOUT__=1
+	[[ "${config[LOGSTERR]}" =~ ^(true|1)$ ]] && export __LOG_STERR__=1
 	[[ "${config[DB]}" =~ ^(true|1)$ ]] && export DB=1
 
-    if [[ -n "${config[LOGLEVEL]}" ]]; then
-        if [[ "${verb[${config[LOGLEVEL]}]+_}" ]]; then
-            export __LOG_LEVEL__="${verb[${config[LOGLEVEL]}]}"
-        else
-            ewarn "$FILENAME does not recognize configuration option LOGLEVEL = ${config[LOGLEVEL]}"
-        fi
-    fi
+	if [[ -n "${config[LOGLEVEL]}" ]]; then
+		if [[ "${verb[${config[LOGLEVEL]}]+_}" ]]; then
+			export __LOG_LEVEL__="${verb[${config[LOGLEVEL]}]}"
+		else
+			ewarn "$FILENAME does not recognize configuration option LOGLEVEL = ${config[LOGLEVEL]}"
+		fi
+	fi
 
-    if [[ -n "${config[LOGPATH]}" ]]; then
-        export __LOGPATH__="${config[LOGPATH]}"
-        __open_logfile__
-    fi
+	if [[ -n "${config[LOGPATH]}" ]]; then
+		export __LOGPATH__="${config[LOGPATH]}"
+		__open_logfile__
+	fi
 
-    # Core config exports
-    export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
-    export BORG_REPO="${config[BORG_REPO]}"
-    export BACKUP_DB="${config[BACKUP_DB]}"
-    export SOME_USER="${config[SOME_USER]}"
-    export BORG_REPO_IP="${config[BORG_REPO_IP]}"
-    export BORG_REPO_MAC="${config[BORG_REPO_MAC]}"
+	# Core config exports
+	export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
+	export BORG_REPO="${config[BORG_REPO]}"
+	export BACKUP_DB="${config[BACKUP_DB]}"
+	export SOME_USER="${config[SOME_USER]}"
+	export BORG_REPO_IP="${config[BORG_REPO_IP]}"
+	export BORG_REPO_MAC="${config[BORG_REPO_MAC]}"
 
-    if [[ -z "${config[EXTRACT_TO]}" ]]; then
-        export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
-    else
-        export EXTRACT_TO="${config[EXTRACT_TO]}"
-    fi
-
-	if [[ -n "$BORG_REPO" ]]; then
-	    validate_repo "$BORG_REPO" "$BORG_REPO_IP" "$BORG_REPO_MAC" || {
-	        ecrit "Validation failed for BORG_REPO '$BORG_REPO'. Aborting."
-	        exit 1
-	    }
+	if [[ -z "${config[EXTRACT_TO]}" ]]; then
+		export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
 	else
-	    ecrit "No BORG_REPO defined in configuration. Aborting."
-	    exit 1
+		export EXTRACT_TO="${config[EXTRACT_TO]}"
+	fi
+
+	# Final validation of the primary BORG_REPO
+	if [[ -n "$BORG_REPO" ]]; then
+		validate_repo "$BORG_REPO" "$BORG_REPO_IP" "$BORG_REPO_MAC" || {
+			ecrit "Validation failed for BORG_REPO '$BORG_REPO'. Aborting."
+			exit 1
+		}
+	else
+		ecrit "No BORG_REPO defined in configuration. Aborting."
+		exit 1
 	fi
 }
 
 append_to_backup_list() {
 	local argument
-	for argument in "$@"; do 
+	for argument in "$@"; do
 		if [[ ! -f "$argument" && ! -d "$argument" ]]; then
 			ecrit "Path '$argument' doesn't seem to exist. Exiting."
 			exit 1
@@ -216,13 +227,13 @@ remove_from_backup_list() {
 		fi
 		lines_passed["$db_entry_line_num"]="$db_entry"
 	done
-	
+
 	local sed_string=""
 	for key in "${!lines_passed[@]}"; do
 		eprint "Removing '${lines_passed[$key]}' from '$BACKUP_DB'"
 		sed_string+="${key}d;"
 	done
-	
+
 	sed -i "${sed_string%;}" "$BACKUP_DB"
 }
 
@@ -232,7 +243,7 @@ parse_parents() {
 		printf '%s\n' "$line"
 	done < "$BACKUP_DB" | \
 
-	# The commands below (recursively?) creates a unique entry for the full *parent* directory structure 
+	# The commands below (recursively?) creates a unique entry for the full *parent* directory structure
 	# pointing to the file/folder we want backed up,
 	# Stolen from: https://serverfault.com/questions/877254/tar-does-not-retain-directory-permissions
 	awk -F/ '{ d=$1; for (i=2; i <= NF; i++) { print d; d=d "/" $i }; print d }' | \
@@ -256,7 +267,7 @@ create_borg_backup() {
 		borg create --paths-from-stdin "$BORG_REPO::${FILES_PREFIX}${DATE}"
 
 	(( ! DB )) && return 0
-	
+
 	eprint "Creating new backup 'databases-$DATE' in '$BORG_REPO'"
 
 	borg create --stdin-name "${DB_PREFIX}${DATE}.sql" \
@@ -281,7 +292,7 @@ list_borg_backups() {
 			else
 				printf "%-8s%s\n" "$counter" "$archive_name"
 			fi
-		done 
+		done
 		printf "\n"
 }
 
@@ -296,14 +307,14 @@ restore_borg_backup() {
 	if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_archives ]]; then
 		# function received a number that is less than or equal to the number of borg backups
 		borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
-	else	
+	else
 		borg_archive=$1
 	fi
 
 	eprint "Extracting '$borg_archive' to '$EXTRACT_TO'."
 	local workingdir=$(pwd)
 	cd "$EXTRACT_TO"
-	borg extract "$BORG_REPO::$borg_archive" 
+	borg extract "$BORG_REPO::$borg_archive"
 	if [[ $? -ne 0 ]]; then
 		eerror "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
 		eerror "Use '$FILENAME -l' to display a list of all valid archives."
@@ -344,36 +355,33 @@ borg_compact_and_prune() {
 	borg prune --glob-archives="${FILES_PREFIX}*" --list \
 		--keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO"
 
-	borg prune --glob-archives="${DB_PREFIX}*" --list \
-		--keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO"
+	if (( DB )); then
+		borg prune --glob-archives="${DB_PREFIX}*" --list \
+			--keep-daily=7 --keep-weekly=3 --keep-monthly=11 --keep-yearly=1 "$BORG_REPO"
+	fi
 
 	borg compact "$BORG_REPO"
 }
 
 duplicate_borg_repo() {
-	local primary_repo="$(realpath -mq "$BORG_REPO")/"	# strip excessive trailing slashes
+	local primary_repo="${BORG_REPO%%+(/)}/" #"$(realpath -mq "$BORG_REPO")/"	# strip excessive trailing slashes
 
-	if validate_repo "$primary_repo"; then
-		if [[ ${#dupe_paths[@]} -gt 0 ]]; then
-			local i
-			for i in "${!dupe_paths[@]}"; do
-				if validate_duplicate "${dupe_paths[$i]}" "${dupe_ips[$i]}" "${dupe_macs[$i]}"; then
-					rsync -au --delete --timeout=5 "$primary_repo" "${dupe_paths[$i]}"  > /dev/null
-					if [[ $? -ne 0 ]]; then
-						ewarn "rsync encountered an error duplicating '$primary_repo' to '${dupe_paths[$i]}'"
-					else
-						edebug "Successfully duplicated to '${dupe_paths[$i]}'"
-					fi
+	if [[ ${#dupe_paths[@]} -gt 0 ]]; then
+		local i
+		for i in "${!dupe_paths[@]}"; do
+			if validate_duplicate "${dupe_paths[$i]}" "${dupe_ips[$i]}" "${dupe_macs[$i]}"; then
+				rsync -au --delete --timeout=5 "$primary_repo" "${dupe_paths[$i]}"	> /dev/null
+				if [[ $? -ne 0 ]]; then
+					ewarn "rsync encountered an error duplicating '$primary_repo' to '${dupe_paths[$i]}'"
 				else
-					ewarn "'${dupe_paths[$i]}' is not a valid duplication endpoint. Skipping."
+					edebug "Successfully duplicated to '${dupe_paths[$i]}'"
 				fi
-			done
-		else
-			ewarn "No duplication paths specified. '$primary_repo' will not be duplicated."
-		fi
+			else
+				ewarn "'${dupe_paths[$i]}' is not a valid duplication endpoint. Skipping."
+			fi
+		done
 	else
-		ecrit "BORG repo '$primary_repo' is not valid. This shouldn't have happened."
-		exit 1
+		ewarn "No duplication paths specified. '$primary_repo' will not be duplicated."
 	fi
 }
 
@@ -422,113 +430,108 @@ get_password() {
 }
 
 validate_repo() {
-    local path="$1"
-    local ip="${2:-$BORG_REPO_IP}"
-    local mac="${3:-$BORG_REPO_MAC}"
-    prepare_mount_path "$path" "$ip" "$mac" true
+	local path="$1"
+	local ip="${2:-$BORG_REPO_IP}"
+	local mac="${3:-$BORG_REPO_MAC}"
+	if ! prepare_mount_path "$path" "$ip" "$mac" true; then
+		ecrit "Could not validate BORG_REPO. Exiting."
+		exit 1
+	else
+		edebug "Borg repo '$path' is valid."
+		return 0
+	fi
 }
 
 validate_duplicate() {
-    local path="$1"
-    local ip="$2"
-    local mac="$3"
+	local path="$1"
+	local ip="$2"
+	local mac="$3"
 
-    if [[ ! -d "$path" ]]; then
-        ewarn "Duplication path '$path' is not a valid directory and will be skipped."
-        return 1
-    fi
+	prepare_mount_path "$path" "$ip" "$mac" false || return 1
 
-    prepare_mount_path "$path" "$ip" "$mac" false || return 1
+	edebug "Validating '$path'..."
 
-    if [[ $(ls -A "$path" | wc -l) -eq 0 ]]; then
-        return 0
-    elif [[ -f "$path/README" && "$(head -n 1 "$path/README")" == "$REPO_STR" ]]; then
-        return 0
-    else
-        ewarn "Duplication path '$path' is either non-empty or not a BORG repo and will be skipped."
-        return 1
-    fi
+	if [[ ! -d "$path" ]]; then
+		ewarn "Duplication path '$path' is not a valid directory and will be skipped."
+		return 1
+	elif [[ $(ls -A "$path" | wc -l) -eq 0 ]]; then
+		edebug "Duplication path '$path' is empty and will be used."
+		return 0
+	elif [[ -f "$path/README" && "$(head -n 1 "$path/README")" == "$REPO_STR" ]]; then
+		edebug "Duplication path '$path' is a valid BORG repo and will be used."
+		return 0
+	else
+		ewarn "Duplication path '$path' is either non-empty or not a BORG repo and will be skipped."
+		return 1
+	fi
 }
 
 prepare_mount_path() {
-    local path="$1"
-    local ip="$2"
-    local mac="$3"
-    local require_borg_repo="${4:-false}"
+	local path="$1"
+	local ip="$2"
+	local mac="$3"
+	local require_borg_repo="${4:-false}"
+	local timer=5
 
-    # Check if this path is listed in fstab
-    if awk -v p="$path" '$1 !~ /^#/ && $2 == p { found = 1 } END { exit !found }' /etc/fstab; then
-        local fstype
-        fstype=$(awk -v p="$path" '$1 !~ /^#/ && $2 == p { print $3; exit }' /etc/fstab)
+	# Check if this path is listed in fstab
+	if findmnt --fstab --target "$path" > /dev/null; then
+		local fstype
+		fstype=$(findmnt -n --fstab --target "$path" --output FSTYPE)
 
-        if [[ "$fstype" == "cifs" ]]; then
-            if [[ -n "$ip" && -n "$mac" ]]; then
-                wake_and_mount "$mac" "$ip" "$path" "$require_borg_repo" || return 1
-            else
-                ewarn "Missing IP or MAC for CIFS mount '$path'"
-                [[ "$require_borg_repo" == "true" ]] && exit 1 || return 1
-            fi
-        fi
+		if [[ "$fstype" == "cifs" ]]; then
+			if [[ -n "$ip" && -n "$mac" ]]; then
+				if ! wake_remote "$mac" "$ip"; then
+					ewarn "Failed to wake remote host '$ip'"
+					return 1
+				fi
+			else
+				ewarn "Missing IP or MAC for CIFS mount '$path'"
+				return 1
+			fi
+		fi
 
-        if ! mountpoint -q "$path"; then
-            ewarn "'$path' is listed in fstab but not mounted."
-            [[ "$require_borg_repo" == "true" ]] && exit 1 || return 1
-        fi
-    fi
+		if ! findmnt --mountpoint "$path" >/dev/null; then
+			edebug "Attempting to mount '$path'"
+			if ! mount "$path"; then
+				ewarn "Failed to mount '$path'"
+				return 1
+			fi
+		else
+			edebug "Kernel shows that '$path' is already mounted. Waiting up to ${timer}m for remote host."
+			if ! timeout "${timer}m" stat "$path" > /dev/null; then
+				ewarn "Timeout waiting for '$path' to become available."
+				return 1
+			fi
+		fi
+	fi
 
-    if [[ "$require_borg_repo" == "true" ]]; then
-        if ! [[ -f "$path/README" && "$(head -n 1 "$path/README")" == "$REPO_STR" ]]; then
-            ecrit "The path '$path' does not contain a valid BORG repository."
-            exit 2
-        fi
-    fi
-
-    return 0
+	if [[ "$require_borg_repo" == "true" ]]; then
+		edebug "Checking if '$path' is a valid BORG repository..."
+		if ! [[ -f "$path/README" && "$(head -n 1 "$path/README")" == "$REPO_STR" ]]; then
+			ecrit "The path '$path' does not contain a valid BORG repository."
+			return 1
+		fi
+	fi
 }
 
-wake_and_mount() {
-    local target_mac="$1"
-    local target_host="$2"
-    local mount_point="$3"
-    local exit_on_failure="${4:-false}"  # whether to exit or return on failure
-    local timeout=30
-    local elapsed=0
+wake_remote() {
+	local target_mac="$1"
+	local target_host="$2"
+	local timeout=30
 
-    edebug "Sending Wake-on-LAN packet to $target_mac..."
-    if ! wakeonlan "$target_mac" > /dev/null; then
-        ewarn "Failed to send WOL packet to $target_mac"
-        [[ "$exit_on_failure" == "true" ]] && exit 1 || return 1
-    fi
+	edebug "Sending Wake-on-LAN packet to $target_mac..."
+	if ! wakeonlan "$target_mac" > /dev/null; then
+		ewarn "Failed to send WOL packet to $target_mac"
+		return 1
+	fi
 
-    edebug "Waiting for host $target_host to respond to ping..."
-    while ! ping -c 1 -W 1 "$target_host" &>/dev/null; do
-        (( elapsed++ >= timeout )) && {
-            ecrit "Ping timeout while waiting for $target_host"
-            [[ "$exit_on_failure" == "true" ]] && exit 2 || return 2
-        }
-        sleep 1
-    done
+	edebug "Waiting for SMB (port 445) on $target_host..."
+	if ! nc -w $timeout -z "$target_host" 445 &>/dev/null; then
+		ewarn "SMB port timeout on $target_host"
+		return 1
+	fi
 
-    edebug "Waiting for SMB (port 445) on $target_host..."
-    while ! nc -w 1 -z "$target_host" 445 &>/dev/null; do
-        (( elapsed++ >= timeout )) && {
-            ecrit "SMB port timeout on $target_host"
-            [[ "$exit_on_failure" == "true" ]] && exit 3 || return 3
-        }
-        sleep 1
-    done
-
-    if ! mountpoint -q "$mount_point"; then
-        edebug "Attempting to mount $mount_point..."
-        if ! mount "$mount_point"; then
-            ecrit "Failed to mount $mount_point"
-            [[ "$exit_on_failure" == "true" ]] && exit 4 || return 4
-        fi
-    else
-        edebug "$mount_point is already mounted."
-    fi
-
-    return 0
+	return 0
 }
 
 grab_key() {
@@ -541,12 +544,12 @@ grab_key() {
 
 grab_value() {
 	# paraemter $1 contains the config file line
-	local -n gv_vref=$2 # gv_vref is a reference to the variable passed as parameter 2 
+	local -n gv_vref=$2 # gv_vref is a reference to the variable passed as parameter 2
 	gv_vref="${1#*=}" # remove everything up to and including first '=' from head of input
 	gv_vref="${gv_vref#"${gv_vref%%[![:space:]]*}"}" # removes leading whitespace
 	gv_vref="${gv_vref%"${gv_vref##*[![:space:]]}"}" # remove trailing whitespace
 	gv_vref="${gv_vref#"${gv_vref%%[![:space:]\"]*}"}" # remove first " and any white space between it and the next character
-	gv_vref="${gv_vref%"${gv_vref##*[![:space:]\"]}"}" 
+	gv_vref="${gv_vref%"${gv_vref##*[![:space:]\"]}"}"
 }
 
 __init_messages__ "$@"
@@ -561,7 +564,7 @@ if [[ ${__LOGS_LOADED__} -ne 1 ]]; then
 	exit 1
 fi
 
-{ printf '%s\n%s' "$MIN_BASH_VER" "$BASH_VERSION" | sort -C -V; } > /dev/null 2>&1	
+{ printf '%s\n%s' "$MIN_BASH_VER" "$BASH_VERSION" | sort -C -V; } > /dev/null 2>&1
 if [[ $? -ne 0 ]]; then
 	ecrit "$FILENAME depends on coreutils v${MIN_COREUTIL_VER}+ and Bash v${MIN_BASH_VER}+. Your system is configured with"
 	printf '%-11s%s\n' "Coreutils:" "$(whoami --version | head -n 1 | awk '{print $NF}')"
@@ -597,15 +600,6 @@ for arg in "${!ARGS[@]}"; do
 	case "$arg" in
 		a ) unpack_args ADD_ARGS "${ARGS[a]}"
 			;;
-#		repo )
-#			REPO_ARG="$(readlink -e "${ARGS[repo]}")"
-#			;;
-#		dupe ) unpack_args dupes "${ARGS[dupe]}"
-#			for i in "${dupes[@]}"; do
-#				tval="$(realpath -mq "$i")"
-#				validate_duplicate "$tval" && dupe_paths+=("$tval")
-#			done
-#			;;
 		conf )
 			CONF_ARG="$(realpath -mq "${ARGS[conf]}")"
 			;;
@@ -620,7 +614,6 @@ if [[ -v ARGS[h] ]]; then
 else
 	[[ -v ARGS[conf] ]] && CONFIGURATION_FILE="$CONF_ARG"
 	parse_config
-#	[[ -v ARGS[repo] ]] && validate_repo "$REPO_ARG" && export BORG_REPO="$REPO_ARG"
 	[[ -v ARGS[pass] ]] && get_password
 	[[ -v ARGS[dest] ]] && export EXTRACT_TO="${ARGS[dest]}"
 	[[ -v ARGS[r] ]] && remove_from_backup_list "${REM_ARGS[@]}"
