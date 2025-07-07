@@ -1,0 +1,15 @@
+_backUP_completions() {
+    local cur prev words cword
+    _init_completion -n = || return
+
+    for ((i=1; i < ${#words[@]}; i++)); do
+        if [[ ${words[i]} == "-u" && $((i + 1)) -eq $cword ]]; then
+            local files
+            files=$(cd /usr/local/etc/backUP 2>/dev/null && compgen -f -X '!*.conf' -- "")
+            COMPREPLY=( $(compgen -W "$files" -- "$cur") )
+            return 0
+        fi
+    done
+}
+complete -F _backUP_completions backUP
+complete -F _backUP_completions "sudo backUP"
