@@ -16,7 +16,7 @@ FILES_PREFIX='files-'
 DB_PREFIX='databases-'
 IS_NUM_REGEX='^[1-9][0-9]*$'
 REPO_STR='This is a Borg Backup repository.'
-SMOL_OPTS='a:e!r:hblLcs!u!v!'
+SMOL_OPTS='a:e:r:hblLcs!u!v!'
 LONG_OPTS='dest!,pass,verb!'
 declare -a dupe_paths
 
@@ -59,6 +59,8 @@ exit 1
 
 parse_config() {
 	export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
+
+	exports=(BORG_PASSPHRASE BORG_REPO BACKUP_DB SOME_USER BORG_REPO_IP BORG_REPO_MAC)
 
 	local -A config verb dupe_index_by_key
 	config=(
@@ -163,12 +165,9 @@ parse_config() {
 	fi
 
 	# Core config exports
-	export BORG_PASSPHRASE="${config[BORG_PASSPHRASE]}"
-	export BORG_REPO="${config[BORG_REPO]}"
-	export BACKUP_DB="${config[BACKUP_DB]}"
-	export SOME_USER="${config[SOME_USER]}"
-	export BORG_REPO_IP="${config[BORG_REPO_IP]}"
-	export BORG_REPO_MAC="${config[BORG_REPO_MAC]}"
+	for var in "${exports[@]}"; do
+		export "$var=${config[$var]}"
+	done
 
 	if [[ -z "${config[EXTRACT_TO]}" ]]; then
 		export EXTRACT_TO="$(getent passwd "$SOME_USER" | cut -d: -f6)/temp"
@@ -305,30 +304,80 @@ list_borg_backups() {
 restore_borg_backup() {
 	local -i num_archives=$(borg list "$BORG_REPO" | wc -l)
 	local borg_archive
-	# Don't change permissions of /
+	local extract_path=""
+	local raw_path="$2"
+
+	edebug "Extract received $# POSITIONALS: $@"
+
+	# Ensure destination directory exists
 	if [[ ! -d "$EXTRACT_TO" ]]; then
 		install -d -m 0755 -o "$SOME_USER" -g "$SOME_USER" "$EXTRACT_TO"
 	fi
 
-	if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_archives ]]; then
-		# function received a number that is less than or equal to the number of borg backups
+	if [[ $1 =~ $IS_NUM_REGEX && $1 -le $num_archives && $1 -ge 1 ]]; then
+		# Get archive name by index
 		borg_archive=$(borg list "$BORG_REPO" | sed -n "$1{p;q}" | awk '{print $1}')
+
+		# Handle optional path argument
+		if [[ -n "$raw_path" ]]; then
+			if [[ $raw_path =~ $IS_NUM_REGEX ]]; then
+				local -i db_lines
+				db_lines=$(wc -l < "$BACKUP_DB")
+				if (( raw_path < 1 || raw_path > db_lines )); then
+					eerror "Line number '$raw_path' is out of range (1–$db_lines) in BACKUP_DB."
+					return 1
+				fi
+				# Fetch entry by line number
+				local db_line
+				db_line=$(sed -n "${raw_path}p" "$BACKUP_DB")
+				extract_path="${db_line#/}"  # Strip leading slash
+			else
+				# Treat as literal path; sanitize by removing leading slashes
+				extract_path="${raw_path##+(/)}"
+				local full_path="/$extract_path"
+				local found=false
+				while read -r db_entry; do
+					[[ "$full_path" == "$db_entry"?(/*)* ]] && { found=true; break; }
+				done < "$BACKUP_DB"
+
+				if ! $found; then
+					eerror "The path '$raw_path' is not a known file or subpath in BACKUP_DB."
+					return 1
+				fi
+			fi
+		fi
 	else
-		borg_archive=$1
+		# Treat as named archive
+		borg_archive="$1"
+
+		if [[ -n "$raw_path" ]]; then
+			eerror "When using a named archive, you may not specify a file path or BACKUP_DB line."
+			return 1
+		fi
 	fi
 
 	eprint "Extracting '$borg_archive' to '$EXTRACT_TO'."
 	local workingdir=$(pwd)
 	cd "$EXTRACT_TO"
-	borg extract "$BORG_REPO::$borg_archive"
-	if [[ $? -ne 0 ]]; then
-		eerror "Borg Backup reports that archive '$1' does not exist in '$BORG_REPO'"
-		eerror "Use '$FILENAME -l' to display a list of all valid archives."
+
+	if [[ -n "$extract_path" ]]; then
+		ewarn "You must extract full archives to preserve parent metadata!"
+		borg extract "$BORG_REPO::$borg_archive" "$extract_path"
 	else
-		eprint "Success! Files extracted to $EXTRACT_TO."
+		borg extract "$BORG_REPO::$borg_archive"
 	fi
+
+	if [[ $? -ne 0 ]]; then
+		eerror "Borg reports failure while extracting archive '$borg_archive'."
+		eerror "Use '$FILENAME -l' to see available archives."
+		cd "$workingdir"
+		return 1
+	fi
+
+	eprint "Success! Files extracted to $EXTRACT_TO."
 	cd "$workingdir"
 }
+
 
 search() {
 	local a
@@ -627,6 +676,8 @@ for arg in "${!ARGS[@]}"; do
 			;;
 		r ) unpack_args REM_ARGS "${ARGS[r]}"
 			;;
+		e) unpack_args EXT_ARGS "${ARGS[e]}"
+			;;
 	esac
 done
 
@@ -642,7 +693,7 @@ else
 	[[ -v ARGS[a] ]] && append_to_backup_list "${ADD_ARGS[@]}"
 	[[ -v ARGS[b] ]] && create_borg_backup
 	[[ -v ARGS[c] ]] && borg_compact_and_prune
-	[[ -v ARGS[e] ]] && restore_borg_backup "${ARGS[e]}"
+	[[ -v ARGS[e] ]] && restore_borg_backup "${EXT_ARGS[@]}"
 	[[ -v ARGS[s] ]] && search "${ARGS[s]}"
 	[[ -v ARGS[l] ]] && list_borg_backups
 	[[ -v ARGS[L] ]] && print_database
