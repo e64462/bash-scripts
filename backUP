@@ -195,6 +195,7 @@ append_to_backup_list() {
 			exit 1
 		fi
 	done
+	[[ -f "$BACKUP_DB" ]] || touch "$BACKUP_DB"
 	for argument in "$@"; do
 		# normalize the input
 		file="$(readlink -e "$argument")"
@@ -209,6 +210,8 @@ append_to_backup_list() {
 }
 
 remove_from_backup_list() {
+	[[ ! -f "$BACKUP_DB" ]] && ewarn "Database '$BACKUP_DB' is empty." && return 1
+
 	local -i db_entry_line_num num_lines=$(wc -l "$BACKUP_DB" | awk '{print $1}')
 	local -A lines_passed
 	local argument db_entry
@@ -441,26 +444,27 @@ duplicate_borg_repo() {
 }
 
 print_database() {
+	[[ -f "$BACKUP_DB" ]] || touch "$BACKUP_DB"
 	printf "\n%-8s%-8s%s\n" "#" "TYPE" "PATH"
 	printf "%s%s%s\n" "------  ------  ------"
 	local -i counter
-		while read line; do
-			if [[ -d $line ]]; then
-				entry_type="Folder"
-			elif [[ -f $line ]]; then
-				entry_type="File"
-			fi
+	while read line; do
+		if [[ -d $line ]]; then
+			entry_type="Folder"
+		elif [[ -f $line ]]; then
+			entry_type="File"
+		fi
 
-			((counter+=1))
-			if [[ $# -eq 0 ]]; then
-				printf "%-8s%-8s%s\n" "$counter" "$entry_type" "$line"
-			elif [[ $counter -eq $1 ]]; then
-				printf "%-8s%-8s%s\n" "[*$counter]" "$entry_type" "$line"
-			else
-				printf "%-8s%-8s%s\n" "$counter" "$entry_type" "$line"
-			fi
-		done < "$BACKUP_DB"
-		printf "\n"
+		((counter+=1))
+		if [[ $# -eq 0 ]]; then
+			printf "%-8s%-8s%s\n" "$counter" "$entry_type" "$line"
+		elif [[ $counter -eq $1 ]]; then
+			printf "%-8s%-8s%s\n" "[*$counter]" "$entry_type" "$line"
+		else
+			printf "%-8s%-8s%s\n" "$counter" "$entry_type" "$line"
+		fi
+	done < "$BACKUP_DB"
+	printf "\n"
 }
 
 get_password() {
@@ -574,6 +578,11 @@ wake_remote() {
 	local target_host="$2"
 	local timeout=30
 
+	if nc -w 2 -z "$target_host" 445 &>/dev/null; then
+		edebug "Remote host accepts SMB connections."
+		return 0
+	fi
+
 	edebug "Sending Wake-on-LAN packet to $target_mac..."
 	if ! wakeonlan "$target_mac" > /dev/null; then
 		ewarn "Failed to send WOL packet to $target_mac"
@@ -586,6 +595,7 @@ wake_remote() {
 		return 1
 	fi
 
+	edebug "Remote host accepts SMB connections."
 	return 0
 }
 
