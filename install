@@ -1,17 +1,52 @@
 #!/bin/bash
 
+set -euo pipefail
+
+# Ensure we're running as root
 if [[ $EUID -ne 0 ]]; then
 	echo "This file must be called with sudo privileges"
 	exit 1
 fi
 
-chown root:root logging args2array backUP install
-chmod 755 logging args2array backUP
-mkdir -p /usr/local/lib/backUP /usr/local/etc/backUP
-ln -f backUP /usr/local/bin
-ln -f args2array /usr/local/lib/backUP
-ln -f logging /usr/local/lib/backUP
+# Source files and target locations
+declare -A FILES=(
+	[backUP]="/usr/local/bin/backUP"
+	[args2array]="/usr/local/lib/backUP/args2array"
+	[logging]="/usr/local/lib/backUP/logging"
+)
 
-touch /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt
-chmod 660 /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt
-chown root:root /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt
+CONFIG_DIR="/usr/local/etc/backUP"
+CONFIG_FILES=(
+	"$CONFIG_DIR/backUP.conf"
+	"$CONFIG_DIR/backup.txt"
+)
+
+# Create necessary directories
+mkdir -p /usr/local/lib/backUP "$CONFIG_DIR"
+
+# Install files if changed
+for src in "${!FILES[@]}"; do
+	dst="${FILES[$src]}"
+	if [[ -e "$dst" ]]; then
+		if cmp -s "$src" "$dst"; then
+			echo "✓ $dst is up to date, skipping"
+			continue
+		else
+			read -p "⚠ $dst differs from source. Overwrite? [y/N] " ans
+			[[ "$ans" =~ ^[Yy]$ ]] || { echo "Skipping $dst"; continue; }
+		fi
+	else
+		echo "→ Installing $dst"
+	fi
+	install -o root -g root -m 755 "$src" "$dst"
+done
+
+# Ensure config files exist with correct perms
+for file in "${CONFIG_FILES[@]}"; do
+	if [[ ! -e "$file" ]]; then
+		touch "$file"
+		echo "→ Created $file"
+	fi
+	chmod 660 "$file"
+	chown root:root "$file"
+done
