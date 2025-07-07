@@ -2,29 +2,68 @@
 
 set -euo pipefail
 
-# Ensure we're running as root
+usage() {
+	cat <<EOF
+Usage: sudo ./install [OPTIONS]
+
+Installs the backUP tool and optional Bash auto-completion.
+
+Options:
+  -u <user>		  User to install auto-completion for (default: \$SUDO_USER)
+  -d <dir>		  Destination directory for bash completions (default: ~<user>/.bash_completion.d)
+  -n			  Do NOT install bash completion
+  -h			  Show this help message
+EOF
+	exit 0
+}
+
+# Default values
+user="${SUDO_USER:-}"
+completion_dir=""
+install_completion=true
+
+# Parse options
+while getopts ":u:d:nh" opt; do
+	case "$opt" in
+		u) user="$OPTARG" ;;
+		d) completion_dir="$OPTARG" ;;
+		n) install_completion=false ;;
+		h) usage ;;
+		:) echo "Missing argument for -$OPTARG" >&2; exit 1 ;;
+		\?) echo "Unknown option: -$OPTARG" >&2; usage ;;
+	esac
+done
+
+# Confirm user is root
 if [[ $EUID -ne 0 ]]; then
-	echo "This file must be called with sudo privileges"
+	echo "This script must be run as root (e.g., with sudo)" >&2
 	exit 1
 fi
 
-# Source files and target locations
+# Determine user home
+if [[ -z "$user" ]]; then
+	echo "No user provided; attempting to use SUDO_USER..."
+	[[ -n "${SUDO_USER:-}" ]] || { echo "Error: -u required when SUDO_USER is not set." >&2; exit 1; }
+	user="$SUDO_USER"
+fi
+
+user_home=$(eval echo "~$user")
+[[ -d "$user_home" ]] || { echo "Error: Home directory for $user not found." >&2; exit 1; }
+
+if [[ -z "$completion_dir" ]]; then
+	completion_dir="$user_home/.bash_completion.d"
+fi
+
+# Install binary and library files
+echo "Installing backUP and support files..."
 declare -A FILES=(
 	[backUP]="/usr/local/bin/backUP"
 	[args2array]="/usr/local/lib/backUP/args2array"
 	[logging]="/usr/local/lib/backUP/logging"
 )
 
-CONFIG_DIR="/usr/local/etc/backUP"
-CONFIG_FILES=(
-	"$CONFIG_DIR/backUP.conf"
-	"$CONFIG_DIR/backup.txt"
-)
+mkdir -p /usr/local/lib/backUP /usr/local/etc/backUP
 
-# Create necessary directories
-mkdir -p /usr/local/lib/backUP "$CONFIG_DIR"
-
-# Install files if changed
 for src in "${!FILES[@]}"; do
 	dst="${FILES[$src]}"
 	if [[ -e "$dst" ]]; then
@@ -41,12 +80,51 @@ for src in "${!FILES[@]}"; do
 	install -o root -g root -m 755 "$src" "$dst"
 done
 
-# Ensure config files exist with correct perms
-for file in "${CONFIG_FILES[@]}"; do
-	if [[ ! -e "$file" ]]; then
-		touch "$file"
-		echo "→ Created $file"
-	fi
-	chmod 660 "$file"
-	chown root:root "$file"
+for cfg in /usr/local/etc/backUP/backUP.conf /usr/local/etc/backUP/backup.txt; do
+	[[ -e "$cfg" ]] || touch "$cfg"
+	chmod 660 "$cfg"
+	chown root:root "$cfg"
 done
+
+# Install bash completion if enabled
+if $install_completion; then
+	echo "Setting up Bash completion..."
+
+	mkdir -p "$completion_dir"
+	chown "$user":"$user" "$completion_dir"
+
+	completion_src=".bash_completion.d/backUP"
+	completion_dst="$completion_dir/backUP"
+
+	if [[ -e "$completion_dst" ]]; then
+		if cmp -s "$completion_src" "$completion_dst"; then
+			echo "✓ Bash completion is up to date, skipping"
+		else
+			read -p "⚠ Bash completion differs. Overwrite $completion_dst? [y/N] " ans
+			[[ "$ans" =~ ^[Yy]$ ]] && cp "$completion_src" "$completion_dst"
+		fi
+	else
+		cp "$completion_src" "$completion_dst"
+		echo "→ Installed bash completion to $completion_dst"
+	fi
+
+	chown "$user":"$user" "$completion_dst"
+
+	# Add sourcing line to .bashrc if needed
+	bashrc="$user_home/.bashrc"
+	source_line="[[ -f \"$completion_dst\" ]] && source \"$completion_dst\""
+
+	if ! grep -Fxq "$source_line" "$bashrc"; then
+		read -p "→ Would you like to add sourcing to $bashrc? [y/N] " ans
+		if [[ "$ans" =~ ^[Yy]$ ]]; then
+			echo "$source_line" >> "$bashrc"
+			echo "✓ Added to $bashrc"
+		else
+			echo "Skipping .bashrc modification"
+		fi
+	else
+		echo "✓ .bashrc already sources the completion"
+	fi
+else
+	echo "Skipping bash completion setup (-n was passed)"
+fi
