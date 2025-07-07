@@ -5,6 +5,7 @@ source /usr/local/lib/backUP/args2array
 
 shopt -s extglob
 
+CONFIGURATION_DIR='/usr/local/etc/backUP'
 CONFIGURATION_FILE='/usr/local/etc/backUP/backUP.conf'
 MIN_BASH_VER='4.0'
 MIN_BORG_VER='1.2.3'
@@ -15,8 +16,8 @@ FILES_PREFIX='files-'
 DB_PREFIX='databases-'
 IS_NUM_REGEX='^[1-9][0-9]*$'
 REPO_STR='This is a Borg Backup repository.'
-SMOL_OPTS='a:e!r:hblLcs!v!'
-LONG_OPTS='dest!,pass,conf!,verb!'
+SMOL_OPTS='a:e!r:hblLcs!u!v!'
+LONG_OPTS='dest!,pass,verb!'
 declare -a dupe_paths
 
 usage(){
@@ -37,7 +38,6 @@ Options:
      -a <path> : Add <path> to the 'database'
      -b        : Backup all 'database' entries with BORG backup
      -c        : Prune and then cleanup BORG backups
- --conf <path> : Specify an alternate $FILENAME config file to use
      -e        : Extract a BORG backup ( Defaults to ~/temp )
  --dest <path> : Set extraction directory ( Only applies to -e flag )
      -l        : List all BORG backups
@@ -45,6 +45,7 @@ Options:
      -h        : Display usage information
      -r <path> : Remove <path> from the 'database'
      -s <name> : Search archives for <name>
+     -u <conf> : Specify which configuration file to use
  --pass        : Prompts for the BORG Backup passphrase
 
 Configuration options are loaded from '$CONFIGURATION_FILE'
@@ -74,6 +75,11 @@ parse_config() {
 	dupe_paths=()
 	dupe_ips=()
 	dupe_macs=()
+
+	if [[ ! -f "$CONFIGURATION_FILE" ]]; then
+		ecrit "No configuration file specified. Use $FILENAME -u <name>"
+		exit 1
+	fi
 
 	while read -r line; do
 		[[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
@@ -552,6 +558,25 @@ grab_value() {
 	gv_vref="${gv_vref%"${gv_vref##*[![:space:]\"]}"}"
 }
 
+find_configuration_file() {
+	local input="$1"
+	local resolved
+
+	# If the input is an absolute or relative path that exists
+	if [[ -f "$input" ]]; then
+		resolved="$(realpath "$input")"
+	# If only the basename was passed, try to find it in CONFIGURATION_DIR
+	elif [[ -n "$CONFIGURATION_DIR" && -f "$CONFIGURATION_DIR/$input" ]]; then
+		resolved="$(realpath "$CONFIGURATION_DIR/$input")"
+	else
+		ewarn "Falling back to default '$CONFIGURATION_FILE' since '$input' not found."
+		return 1  # Not found
+	fi
+
+	export CONFIGURATION_FILE="$resolved"
+	return 0
+}
+
 __init_messages__ "$@"
 
 if [[ ${__ARGS_LOADED__} -ne 1 ]]; then
@@ -600,9 +625,6 @@ for arg in "${!ARGS[@]}"; do
 	case "$arg" in
 		a ) unpack_args ADD_ARGS "${ARGS[a]}"
 			;;
-		conf )
-			CONF_ARG="$(realpath -mq "${ARGS[conf]}")"
-			;;
 		r ) unpack_args REM_ARGS "${ARGS[r]}"
 			;;
 	esac
@@ -612,7 +634,7 @@ if [[ -v ARGS[h] ]]; then
 	usage
 	exit 0
 else
-	[[ -v ARGS[conf] ]] && CONFIGURATION_FILE="$CONF_ARG"
+	[[ -v ARGS[u] ]] && find_configuration_file "${ARGS[u]}"
 	parse_config
 	[[ -v ARGS[pass] ]] && get_password
 	[[ -v ARGS[dest] ]] && export EXTRACT_TO="${ARGS[dest]}"
