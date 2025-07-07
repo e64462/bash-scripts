@@ -118,9 +118,9 @@ function __open_logfile__() {
 				__SED_SO_PID__=$!
 				exec 1>>"${__STOUT_PIPE__}"
 				
-				edebug "${FUNCNAME[0]} inherited stout from __init_messages__ on FD: '${__STOUTFD__}'"
-				edebug "Pipe initialized on FD: '${__SO_PIPE_FD__}' pointing to '${__STOUT_PIPE__}'"
-				edebug "Sed filtering '${__STOUT_PIPE__}' on PID: '${__SED_SO_PID__}.' Appending output to: '${__LOG__}' and FD: '${__STOUTFD__}'"
+				etrace "${FUNCNAME[0]} inherited stout from __init_messages__ on FD: '${__STOUTFD__}'"
+				etrace "Pipe initialized on FD: '${__SO_PIPE_FD__}' pointing to '${__STOUT_PIPE__}'"
+				etrace "Sed filtering '${__STOUT_PIPE__}' on PID: '${__SED_SO_PID__}.' Appending output to: '${__LOG__}' and FD: '${__STOUTFD__}'"
 				edumpvar user __STOUT_PIPE__ __SO_PIPE_FD__ __SED_SO_PID__
 			fi
 
@@ -136,9 +136,9 @@ function __open_logfile__() {
 				__SED_SE_PID__=$!
 				exec 2>>"${__STERR_PIPE__}"
 
-				edebug "${FUNCNAME[0]} inherited sterr from __init_messages__ on FD: '${__STERRFD__}'"
-				edebug "Pipe initialized on FD: '${__SE_PIPE_FD__}' pointing to '${__STERR_PIPE__}'"
-				edebug "Sed filtering '${__STERR_PIPE__}' on PID: '${__SED_SE_PID__}.' Appending output to: '${__LOG__}' and FD: '${__STERRFD__}'"
+				etrace "${FUNCNAME[0]} inherited sterr from __init_messages__ on FD: '${__STERRFD__}'"
+				etrace "Pipe initialized on FD: '${__SE_PIPE_FD__}' pointing to '${__STERR_PIPE__}'"
+				etrace "Sed filtering '${__STERR_PIPE__}' on PID: '${__SED_SE_PID__}.' Appending output to: '${__LOG__}' and FD: '${__STERRFD__}'"
 				edumpvar user __STERR_PIPE__ __SE_PIPE_FD__ __SED_SE_PID__
 			fi
 
@@ -160,7 +160,7 @@ function __open_logfile__() {
 }
 
 function __end_messages__() {
-	[[ -n "${__LOG_OPEN__}" ]] && dlog "_white_" "LOGS" "SESSION CLOSING\n" && unset __LOG_OPEN__
+	[[ -n "${__LOG_OPEN__}" ]] && dlog "_white_" "LOGS" "SESSION CLOSED\n" && unset __LOG_OPEN__
 	[[ -v __LOGFD__ ]] && exec {__LOGFD__}>&-
 	exec 1>&${__STOUTFD__}-
 	exec 2>&${__STERRFD__}-
