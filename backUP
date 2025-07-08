@@ -529,7 +529,7 @@ prepare_mount_path() {
 	local path="$1"
 	local ip="$2"
 	local mac="$3"
-	local require_borg_repo="${4:-false}"
+	local required="${4:-false}"
 	local timer=5
 
 	# Check if this path is listed in fstab
@@ -539,7 +539,7 @@ prepare_mount_path() {
 
 		if [[ "$fstype" == "cifs" ]]; then
 			if [[ -n "$ip" && -n "$mac" ]]; then
-				if ! wake_remote "$mac" "$ip"; then
+				if ! wake_remote "$mac" "$ip" "$required"; then
 					ewarn "Failed to wake remote host '$ip'"
 					return 1
 				fi
@@ -564,7 +564,7 @@ prepare_mount_path() {
 		fi
 	fi
 
-	if [[ "$require_borg_repo" == "true" ]]; then
+	if [[ "$required" == "true" ]]; then
 		edebug "Checking if '$path' is a valid BORG repository..."
 		if ! [[ -f "$path/README" && "$(head -n 1 "$path/README")" == "$REPO_STR" ]]; then
 			ecrit "The path '$path' does not contain a valid BORG repository."
@@ -576,6 +576,7 @@ prepare_mount_path() {
 wake_remote() {
 	local target_mac="$1"
 	local target_host="$2"
+	local required="$3"
 	local timeout=30
 
 	if nc -w 2 -z "$target_host" 445 &>/dev/null; then
@@ -583,6 +584,11 @@ wake_remote() {
 		return 0
 	fi
 
+	if [[ "$required" == true ]] && ! wakeonlan -v >/dev/null; then
+		ecrit "$FILENAME depends on 'wakeonlan' package." 
+		return 1
+	fi
+	
 	edebug "Sending Wake-on-LAN packet to $target_mac..."
 	if ! wakeonlan "$target_mac" > /dev/null; then
 		ewarn "Failed to send WOL packet to $target_mac"
