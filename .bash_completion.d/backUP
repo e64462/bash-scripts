@@ -8,6 +8,21 @@ _backUP_completions() {
             files=$(cd /usr/local/etc/backUP 2>/dev/null && compgen -f -X '!*.conf' -- "")
             COMPREPLY=( $(compgen -W "$files" -- "$cur") )
             return 0
+
+        elif [[ ${words[i]} == "-a" && $((i + 1)) -eq $cword ]] || \
+             [[ ${words[i]} == "-r" && $((i + 1)) -eq $cword ]]; then
+
+            local IFS=$'\n'
+            local completions=( $(compgen -o default -- "$cur") )
+            COMPREPLY=()
+
+            for path in "${completions[@]}"; do
+                [[ -d "$path" ]] && path="$path/"
+                COMPREPLY+=("$path")
+            done
+
+            compopt -o nospace
+            return 0
         fi
     done
 }
