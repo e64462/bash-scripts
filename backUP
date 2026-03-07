@@ -589,8 +589,10 @@ wake_remote() {
 		return 1
 	fi
 	
+	local args
+	[[ -n $target_host ]] && args=("-i" "$target_host" "$target_mac") || args=("$target_mac")
 	edebug "Sending Wake-on-LAN packet to $target_mac..."
-	if ! wakeonlan "$target_mac" > /dev/null; then
+	if ! wakeonlan "${args[@]}" > /dev/null; then
 		ewarn "Failed to send WOL packet to $target_mac"
 		return 1
 	fi
