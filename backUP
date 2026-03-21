@@ -577,7 +577,6 @@ wake_remote() {
 	local target_mac="$1"
 	local target_host="$2"
 	local required="$3"
-	local timeout=30
 
 	if nc -w 2 -z "$target_host" 445 &>/dev/null; then
 		edebug "Remote host accepts SMB connections."
@@ -589,22 +588,27 @@ wake_remote() {
 		return 1
 	fi
 	
-	local args
+	local args=()
 	[[ -n $target_host ]] && args=("-i" "$target_host" "$target_mac") || args=("$target_mac")
-	edebug "Sending Wake-on-LAN packet to $target_mac..."
-	if ! wakeonlan "${args[@]}" > /dev/null; then
-		ewarn "Failed to send WOL packet to $target_mac"
-		return 1
-	fi
 
+	local timeout=$(( SECONDS + 30 ))
 	edebug "Waiting for SMB (port 445) on $target_host..."
-	if ! nc -w $timeout -z "$target_host" 445 &>/dev/null; then
+	while ! nc -w 10 -z "$target_host" 445 &>/dev/null; do
+		edebug "Sending Wake-on-LAN packet to $target_mac..."
+		if ! wakeonlan "${args[@]}" > /dev/null; then
+			ewarn "Failed to send WOL packet to $target_mac"
+			return 1
+		fi
+		(( SECONDS >= timeout )) && accepts=false && break
+	done
+
+	if ${accepts:-true}; then
+		edebug "Remote host accepts SMB connections."
+		return 0
+	else
 		ewarn "SMB port timeout on $target_host"
 		return 1
 	fi
-
-	edebug "Remote host accepts SMB connections."
-	return 0
 }
 
 grab_key() {
