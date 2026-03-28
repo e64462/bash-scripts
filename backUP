@@ -492,13 +492,18 @@ validate_repo() {
 	local path="$1"
 	local ip="${2:-$BORG_REPO_IP}"
 	local mac="${3:-$BORG_REPO_MAC}"
-	if ! prepare_mount_path "$path" "$ip" "$mac" true; then
+	if ! prepare_mount_path "$path" "$ip" "$mac"; then
 		ecrit "Could not validate BORG_REPO. Exiting."
-		exit 1
-	else
-		edebug "Borg repo '$path' is valid."
-		return 0
+		return 1
 	fi
+
+	edebug "Checking if '$path' is a valid BORG repository..."
+	if ! [[ -f "$path/README" && "$(head -n 1 "$path/README")" == "$REPO_STR" ]]; then
+		ecrit "Invalid BORG repository: '$path'"
+		return 1
+	fi
+	edebug "Borg repo '$path' is valid."
+	return 0
 }
 
 validate_duplicate() {
@@ -506,7 +511,7 @@ validate_duplicate() {
 	local ip="$2"
 	local mac="$3"
 
-	prepare_mount_path "$path" "$ip" "$mac" false || return 1
+	prepare_mount_path "$path" "$ip" "$mac" || return 1
 
 	edebug "Validating '$path'..."
 
@@ -529,45 +534,37 @@ prepare_mount_path() {
 	local path="$1"
 	local ip="$2"
 	local mac="$3"
-	local required="${4:-false}"
-	local timer=5
 
 	# Check if this path is listed in fstab
-	if findmnt --fstab --target "$path" > /dev/null; then
-		local fstype
-		fstype=$(findmnt -n --fstab --target "$path" --output FSTYPE)
+	if ! findmnt --fstab --target "$path" > /dev/null; then
+		return 0
+	fi
 
-		if [[ "$fstype" == "cifs" ]]; then
-			if [[ -n "$ip" && -n "$mac" ]]; then
-				if ! wake_remote "$mac" "$ip" "$required"; then
-					ewarn "Failed to wake remote host '$ip'"
-					return 1
-				fi
-			else
-				ewarn "Missing IP or MAC for CIFS mount '$path'"
-				return 1
-			fi
-		fi
+	local fstype=$(findmnt -n --fstab --target "$path" --output FSTYPE)
+	local timer=5
 
-		if ! findmnt --mountpoint "$path" >/dev/null; then
-			edebug "Attempting to mount '$path'"
-			if ! mount "$path"; then
-				ewarn "Failed to mount '$path'"
+	if [[ "$fstype" == "cifs" ]]; then
+		if [[ -n "$ip" && -n "$mac" ]]; then
+			if ! wake_remote "$mac" "$ip"; then
+				ewarn "Failed to wake remote host '$ip'"
 				return 1
 			fi
 		else
-			edebug "Kernel shows that '$path' is already mounted. Waiting up to ${timer}m for remote host."
-			if ! timeout "${timer}m" stat "$path" > /dev/null; then
-				ewarn "Timeout waiting for '$path' to become available."
-				return 1
-			fi
+			ewarn "Missing IP or MAC for CIFS mount '$path'"
+			return 1
 		fi
 	fi
 
-	if [[ "$required" == "true" ]]; then
-		edebug "Checking if '$path' is a valid BORG repository..."
-		if ! [[ -f "$path/README" && "$(head -n 1 "$path/README")" == "$REPO_STR" ]]; then
-			ecrit "The path '$path' does not contain a valid BORG repository."
+	if ! findmnt --mountpoint "$path" >/dev/null; then
+		edebug "Attempting to mount '$path'"
+		if ! mount "$path"; then
+			ewarn "Failed to mount '$path'"
+			return 1
+		fi
+	else
+		edebug "Kernel shows that '$path' is already mounted. Waiting up to ${timer}m for remote host."
+		if ! timeout "${timer}m" stat "$path" &> /dev/null; then
+			ewarn "Timeout waiting for '$path' to become available."
 			return 1
 		fi
 	fi
@@ -576,14 +573,13 @@ prepare_mount_path() {
 wake_remote() {
 	local target_mac="$1"
 	local target_host="$2"
-	local required="$3"
 
-	if nc -w 2 -z "$target_host" 445 &>/dev/null; then
+	if timeout 1 bash -c "</dev/tcp/${target_host}/445" &>/dev/null; then
 		edebug "Remote host accepts SMB connections."
 		return 0
 	fi
 
-	if [[ "$required" == true ]] && ! wakeonlan -v >/dev/null; then
+	if ! command -v wakeonlan &>/dev/null; then
 		ecrit "$FILENAME depends on 'wakeonlan' package." 
 		return 1
 	fi
@@ -591,24 +587,20 @@ wake_remote() {
 	local args=()
 	[[ -n $target_host ]] && args=("-i" "$target_host" "$target_mac") || args=("$target_mac")
 
-	local timeout=$(( SECONDS + 30 ))
 	edebug "Waiting for SMB (port 445) on $target_host..."
-	while ! nc -w 10 -z "$target_host" 445 &>/dev/null; do
+	local deadline=$(( SECONDS + 30 ))
+	while (( SECONDS < deadline )); do
 		edebug "Sending Wake-on-LAN packet to $target_mac..."
-		if ! wakeonlan "${args[@]}" > /dev/null; then
-			ewarn "Failed to send WOL packet to $target_mac"
-			return 1
+		wakeonlan "${args[@]}" &>/dev/null
+		if timeout "$(( deadline - SECONDS ))" bash -c "</dev/tcp/${target_host}/445" &>/dev/null; then
+			edebug "Remote host accepts SMB connections."
+			return 0
 		fi
-		(( SECONDS >= timeout )) && accepts=false && break
+		sleep 1
 	done
 
-	if ${accepts:-true}; then
-		edebug "Remote host accepts SMB connections."
-		return 0
-	else
-		ewarn "SMB port timeout on $target_host"
-		return 1
-	fi
+	ewarn "SMB port timeout on $target_host"
+	return 1
 }
 
 grab_key() {
